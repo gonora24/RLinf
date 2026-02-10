@@ -100,7 +100,7 @@ env:
     group_size: 1
     is_eval: True
     video_cfg:
-      save_video: True
+      save_video: False #True
       video_base_dir: ${runner.logger.log_path}/video/eval
 
 rollout:
@@ -119,7 +119,7 @@ actor:
   micro_batch_size: 1
   global_batch_size: 1
   seed: 1234
-  enable_offload: False
+  enable_offload: True #False
 
   # Override the default values in model/gr00t
   model:
@@ -140,6 +140,7 @@ actor:
   # Override the default values in training_backend/fsdp
   fsdp_config:
     strategy: "fsdp"
+    cpu_offload: True # False
     mixed_precision:
       param_dtype: ${actor.model.precision}
       reduce_dtype: ${actor.model.precision}
