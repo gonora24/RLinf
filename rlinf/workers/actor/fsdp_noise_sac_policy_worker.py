@@ -107,27 +107,53 @@ class EmbodiedNoiseSACFSDPPolicy(EmbodiedFSDPActor):
     ):
         betas = (self._cfg.optim.adam_beta1, self._cfg.optim.adam_beta2)
 
+        params_action_critic = []
+        params_noise_critic = []
+        params_actor = []
         if enable_critic_warmup:
-            raise NotImplementedError
-        
-        policy_params = list(model.noise_policy.parameters())
-        action_critic_params = list(model.action_critic.parameters())
-        noise_critic_params = list(model.noise_critic.parameters())
-        critic_params = action_critic_params + noise_critic_params
+            self._logger.info("[FSDP] Enable critic warmup for critic action head.")
+            for name, param in model.named_parameters():
+                if param.requires_grad:
+                    self.store_requires_grad_param_name.append(name)
+                    if "action_critic" in name or "model.action_critic" in name:
+                        params_action_critic.append(param)
+                        continue
+                    param.requires_grad = False
+        else:
+            for name, param in model.named_parameters():
+                if name in self.store_requires_grad_param_name:
+                    param.requires_grad = True
+                if param.requires_grad:
+                    if "action_critic" in name or "model.action_critic" in name:
+                        params_action_critic.append(param)
+                    elif "noise_critic" in name or "model.noise_critic" in name:
+                        params_noise_critic.append(param)
+                    else:
+                        params_actor.append(param)
 
         for p in model.openpi.parameters():
             assert not p.requires_grad, "OpenPI parameters should be frozen."
 
         self.optimizer = torch.optim.Adam(
             [
-                {"params": policy_params, "lr": self._cfg.optim.lr, "betas": betas},
+                {"params": params_actor, "lr": self._cfg.optim.lr, "betas": betas},
             ]
         )
-        self.qf_optimizer = torch.optim.Adam(
+        self.qf_action_optimizer = torch.optim.Adam(
             [
                 {
-                    "params": critic_params,
-                    "lr": self._cfg.optim.value_lr,
+                    "params": params_action_critic,
+                    "lr": self._cfg.optim.action_q_lr,
+                    "betas": betas,
+                },
+            ]
+        )
+
+        self.qf_noise_optimizer = torch.optim.Adam(
+            [
+                {
+                    "params": params_noise_critic,
+                    "lr": self._cfg.optim.noise_q_lr,
                     "betas": betas,
                 },
             ]
@@ -165,8 +191,11 @@ class EmbodiedNoiseSACFSDPPolicy(EmbodiedFSDPActor):
             self.lr_scheduler = torch.optim.lr_scheduler.ConstantLR(
                 self.optimizer, factor=1
             )
-            self.qf_lr_scheduler = torch.optim.lr_scheduler.ConstantLR(
-                self.qf_optimizer, factor=1
+            self.qf_action_lr_scheduler = torch.optim.lr_scheduler.ConstantLR(
+                self.qf_action_optimizer, factor=1
+            )
+            self.qf_noise_lr_scheduler = torch.optim.lr_scheduler.ConstantLR(
+                self.qf_noise_optimizer, factor=1
             )
             if self.cfg.algorithm.get("auto_entropy_tuning", False):
                 self.alpha_lr_scheduler = torch.optim.lr_scheduler.ConstantLR(
@@ -176,8 +205,11 @@ class EmbodiedNoiseSACFSDPPolicy(EmbodiedFSDPActor):
             self.lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
                 self.optimizer, T_max=self.max_steps, eta_min=1e-6
             )
-            self.qf_lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-                self.qf_optimizer, T_max=self.max_steps, eta_min=1e-6
+            self.qf_action_lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                self.qf_action_optimizer, T_max=self.max_steps, eta_min=1e-6
+            )
+            self.qf_noise_lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                self.qf_noise_optimizer, T_max=self.max_steps, eta_min=1e-6
             )
             if self.cfg.algorithm.get("auto_entropy_tuning", False):
                 self.alpha_lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
@@ -268,7 +300,7 @@ class EmbodiedNoiseSACFSDPPolicy(EmbodiedFSDPActor):
             )
             next_state_log_pi = next_state_log_pi.sum(dim=-1, keepdim=True)
             if not use_crossq:
-                all_qf_next_target = self.target_model(
+                all_qf_next_target, all_qf_noise_next_target = self.target_model(
                     forward_type=ForwardType.SAC_Q,
                     obs=next_obs,
                     actions=next_state_actions,
@@ -313,7 +345,7 @@ class EmbodiedNoiseSACFSDPPolicy(EmbodiedFSDPActor):
                 raise NotImplementedError(f"{bootstrap_type=} is not supported!")
 
         if not use_crossq:
-            all_data_q_values = self.model(
+            all_data_q_values, all_noise_q_values = self.model(
                 forward_type=ForwardType.SAC_Q,
                 obs=curr_obs,
                 actions=batch["action"]
@@ -358,7 +390,21 @@ class EmbodiedNoiseSACFSDPPolicy(EmbodiedFSDPActor):
         critic_loss = F.mse_loss(
             all_data_q_values, target_q_values.expand_as(all_data_q_values)
         )
-        return critic_loss
+        critic_distill_loss = 0.5*F.mse_loss(all_noise_q_values, all_data_q_values.detach())
+        return critic_loss, critic_distill_loss
+    
+    def forward_distill(self, batch):
+        curr_obs = batch["transitions"]["obs"]
+        with torch.no_grad():
+            current_q_values, noise_q_values = self.model(
+                forward_type=ForwardType.SAC_DISTILL, obs=curr_obs
+            )
+            distill_loss = 0
+            for i in range(len(current_q_values)):
+                current_q = current_q_values[i]
+                current_q_noise = noise_q_values[i]
+                distill_loss = distill_loss + 0.5*F.mse_loss(current_q_noise, current_q.detach())
+        return distill_loss
 
     def forward_actor(self, batch):
         use_crossq = self.cfg.algorithm.get("q_head_type", "default") == "crossq"
@@ -425,7 +471,7 @@ class EmbodiedNoiseSACFSDPPolicy(EmbodiedFSDPActor):
             global_batch_size_per_rank // self.cfg.actor.micro_batch_size,
         )
 
-        self.qf_optimizer.zero_grad()
+        self.qf_action_optimizer.zero_grad()
         gbs_critic_loss = []
         for batch in train_micro_batch_list:
             batch = put_tensor_device(batch, device=self.device)
@@ -436,12 +482,12 @@ class EmbodiedNoiseSACFSDPPolicy(EmbodiedFSDPActor):
             max_norm=self.cfg.actor.optim.clip_grad
         )
 
-        self.qf_optimizer.step()
-        self.qf_lr_scheduler.step()
+        self.qf_action_optimizer.step()
+        self.qf_action_lr_scheduler.step()
 
         metrics_data = {
             "sac/critic_loss": np.mean(gbs_critic_loss),
-            "critic/lr": self.qf_optimizer.param_groups[0]["lr"],
+            "critic/lr": self.qf_action_optimizer.param_groups[0]["lr"],
             "critic/grad_norm": qf_grad_norm,
         }
 
@@ -482,7 +528,15 @@ class EmbodiedNoiseSACFSDPPolicy(EmbodiedFSDPActor):
                 self.alpha_optimizer.step()
                 self.alpha_lr_scheduler.step()
 
-            #TODO: critic distill loss and update
+            #TODO: critic distill loss and update, noise critic grad step for loop?
+            self.qf_noise_optimizer.zero_grad()
+            distill_loss = self.forward_distill(global_batch) / self.gradient_accumulation
+            distill_loss.backward()
+            noise_q_grad_norm = self.model.clip_grad_norm_(
+                max_norm=self.cfg.actor.optim.clip_grad, params=self.model.noise_critic.parameters()
+            )
+            self.qf_noise_optimizer.step()
+            self.qf_noise_lr_scheduler.step()
 
             # Collect metrics
             metrics_data.update(
@@ -568,14 +622,22 @@ class EmbodiedNoiseSACFSDPPolicy(EmbodiedFSDPActor):
             // self._world_size
         )
 
-        self.model.train() # funktioniert das?
+        self.model.train() # funktioniert das bei meinem modell?
         metrics = {}
 
-        update_epoch = self.cfg.algorithm.get("update_epoch", 1)
-        for _ in range(update_epoch):
-            metrics_data = self.update_one_epoch(train_actor)
-            append_to_dict(metrics, metrics_data)
-            self.update_step += 1
+        if self.critic_warmup_steps > 0:
+            # critic warmup
+            for _ in range(self.critic_warmup_steps):
+                metrics_data = self.update_one_epoch(train_actor=False)
+                append_to_dict(metrics, metrics_data)
+                self.update_step += 1
+                
+        else:
+            update_epoch = self.cfg.algorithm.get("update_epoch", 1)
+            for _ in range(update_epoch):
+                metrics_data = self.update_one_epoch(train_actor)
+                append_to_dict(metrics, metrics_data)
+                self.update_step += 1
 
         mean_metric_dict = self.process_train_metrics(metrics)
 
