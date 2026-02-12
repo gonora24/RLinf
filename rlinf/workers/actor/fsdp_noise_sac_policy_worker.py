@@ -106,27 +106,27 @@ class EmbodiedNoiseSACFSDPPolicy(EmbodiedFSDPActor):
         enable_critic_warmup: bool = False,
     ):
         betas = (self._cfg.optim.adam_beta1, self._cfg.optim.adam_beta2)
-        params_actor = []
-        params_critic = []
+
         if enable_critic_warmup:
             raise NotImplementedError
-        else:
-            for name, param in self.model.named_parameters():
-                if param.requires_grad:
-                    if "q_head" in name:
-                        params_critic.append(param)
-                    else:
-                        params_actor.append(param)
-        assert len(params_critic) > 0
+        
+        policy_params = list(model.noise_policy.parameters())
+        action_critic_params = list(model.action_critic.parameters())
+        noise_critic_params = list(model.noise_critic.parameters())
+        critic_params = action_critic_params + noise_critic_params
+
+        for p in model.openpi.parameters():
+            assert not p.requires_grad, "OpenPI parameters should be frozen."
+
         self.optimizer = torch.optim.Adam(
             [
-                {"params": params_actor, "lr": self._cfg.optim.lr, "betas": betas},
+                {"params": policy_params, "lr": self._cfg.optim.lr, "betas": betas},
             ]
         )
         self.qf_optimizer = torch.optim.Adam(
             [
                 {
-                    "params": params_critic,
+                    "params": critic_params,
                     "lr": self._cfg.optim.value_lr,
                     "betas": betas,
                 },
@@ -274,42 +274,43 @@ class EmbodiedNoiseSACFSDPPolicy(EmbodiedFSDPActor):
                     actions=next_state_actions,
                     shared_feature=shared_feature,
                 )
-                if self.critic_subsample_size > 0:
-                    sample_idx = torch.randint(
-                        0,
-                        all_qf_next_target.shape[-1],
-                        (self.critic_subsample_size,),
-                        generator=self.critic_sample_generator,
-                        device=self.device,
-                    )
-                    all_qf_next_target = all_qf_next_target.index_select(
-                        dim=-1, index=sample_idx
-                    )
 
-                if agg_q == "min":
-                    qf_next_target, _ = torch.min(
-                        all_qf_next_target, dim=1, keepdim=True
-                    )
-                elif agg_q == "mean":
-                    qf_next_target = torch.mean(all_qf_next_target, dim=1, keepdim=True)
+            if self.critic_subsample_size > 0:
+                sample_idx = torch.randint(
+                    0,
+                    all_qf_next_target.shape[-1],
+                    (self.critic_subsample_size,),
+                    generator=self.critic_sample_generator,
+                    device=self.device,
+                )
+                all_qf_next_target = all_qf_next_target.index_select(
+                    dim=-1, index=sample_idx
+                )
 
-                if self.cfg.algorithm.get("backup_entropy", True):
-                    qf_next_target = qf_next_target - self.alpha * next_state_log_pi
-                    qf_next_target = qf_next_target.to(dtype=self.torch_dtype)
-                if bootstrap_type == "always":
-                    target_q_values = (
-                        rewards.sum(dim=-1, keepdim=True)
-                        + self.cfg.algorithm.gamma * qf_next_target
-                    )  # [bsz, 1]
-                elif bootstrap_type == "standard":
-                    target_q_values = (
-                        rewards.sum(dim=-1, keepdim=True)
-                        + (~(terminations.any(dim=-1, keepdim=True)))
-                        * self.cfg.algorithm.gamma
-                        * qf_next_target
-                    )  # [bsz, 1]
-                else:
-                    raise NotImplementedError(f"{bootstrap_type=} is not supported!")
+            if agg_q == "min":
+                qf_next_target, _ = torch.min(
+                    all_qf_next_target, dim=1, keepdim=True
+                )
+            elif agg_q == "mean":
+                qf_next_target = torch.mean(all_qf_next_target, dim=1, keepdim=True)
+
+            if self.cfg.algorithm.get("backup_entropy", True):
+                qf_next_target = qf_next_target - self.alpha * next_state_log_pi
+                qf_next_target = qf_next_target.to(dtype=self.torch_dtype)
+            if bootstrap_type == "always":
+                target_q_values = (
+                    rewards.sum(dim=-1, keepdim=True)
+                    + self.cfg.algorithm.gamma * qf_next_target
+                )  # [bsz, 1]
+            elif bootstrap_type == "standard":
+                target_q_values = (
+                    rewards.sum(dim=-1, keepdim=True)
+                    + (~(terminations.any(dim=-1, keepdim=True)))
+                    * self.cfg.algorithm.gamma
+                    * qf_next_target
+                )  # [bsz, 1]
+            else:
+                raise NotImplementedError(f"{bootstrap_type=} is not supported!")
 
         if not use_crossq:
             all_data_q_values = self.model(
@@ -372,6 +373,7 @@ class EmbodiedNoiseSACFSDPPolicy(EmbodiedFSDPActor):
         log_pi_per_chunk = log_pi.sum(dim=-1)  # sum over action_env_dim, keep chunk dimension
 
         # Query Q-values for the current policy actions
+        # TODO: only noise critic
         all_qf_pi = self.model(
             forward_type=ForwardType.SAC_Q,
             obs=curr_obs,
@@ -480,6 +482,8 @@ class EmbodiedNoiseSACFSDPPolicy(EmbodiedFSDPActor):
                 self.alpha_optimizer.step()
                 self.alpha_lr_scheduler.step()
 
+            #TODO: critic distill loss and update
+
             # Collect metrics
             metrics_data.update(
                 {
@@ -564,7 +568,7 @@ class EmbodiedNoiseSACFSDPPolicy(EmbodiedFSDPActor):
             // self._world_size
         )
 
-        self.model.train()
+        self.model.train() # funktioniert das?
         metrics = {}
 
         update_epoch = self.cfg.algorithm.get("update_epoch", 1)

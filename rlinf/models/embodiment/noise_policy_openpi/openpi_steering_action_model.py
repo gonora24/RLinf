@@ -12,14 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from glob import glob
 import math
+import os
+from pyexpat import model
 import random
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import datacla, dataclass
+from xml.parsers.expat import modelss, field
 from typing import Any, Literal
 
 import jax
+from matplotlib import transforms
 import numpy as np
+import safetensors
 import torch
 import torch.nn as nn
 from openpi import transforms as _transforms
@@ -27,14 +33,19 @@ from openpi.models import model as _model
 from openpi.models.pi0_config import Pi0Config
 from openpi.models_pytorch.pi0_pytorch import PI0Pytorch, make_att_2d_masks
 
+from examples.searchr1 import download
 from rlinf.models.embodiment.base_policy import BasePolicy, ForwardType
-from rlinf.models.embodiment.modules.explore_noise_net import ExploreNoiseNet
+from rlinf.models.embodiment.modules.gaussian_policy import GaussianTanhPolicy
 from rlinf.models.embodiment.modules.q_head import QHead
-from rlinf.models.embodiment.modules.value_head import ValueHead
+from rlinf.models.embodiment.modules.resnet_utils import ResNetEncoder
+from rlinf.models.embodiment.modules.utils import init_mlp_weights, make_mlp
+from rlinf.models.embodiment.openpi.dataconfig import get_openpi_config
+from rlinf.models.embodiment.openpi.openpi_action_model import OpenPi0Config
 
 
 @dataclass(frozen=True)
-class OpenPi0Config(Pi0Config):
+class NoisePolicyConfig():
+    # TODO: clean
     # config for rl
     config_name: str = "pi0_libero"  # pi0_libero, pi05_libero, pi0_maniskill, pi05_maniskill, pi0_metaworld, pi05_metaworld
     num_images_in_input: int = 2  # number of images in input
@@ -68,13 +79,15 @@ class OpenPi0Config(Pi0Config):
     value_vlm_mode: str = "mean_token"  # last_token, mean_token, first_token
 
 
-class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
+class NoisePolicyForOpenPI(BasePolicy):
     """
-    Pi0 model for reinforcement learning action prediction.
+    Noise policy model for reinforcement learning action prediction.
     """
 
-    config: OpenPi0Config
+    config: NoisePolicyConfig
 
+    # Tells fsdp what not to split when doing auto-wrapping
+    # TODO
     @property
     def _no_split_modules(self) -> list[str]:
         if self.config.train_expert_only:
@@ -112,85 +125,127 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
 
     def __init__(
         self,
-        config: OpenPi0Config,
+        config: NoisePolicyConfig,
     ):
         # Override `sample_actions` to prevent parent class polymorphic call
         sample_actions_func = self.sample_actions
         super().__init__(config)
         self.sample_actions = sample_actions_func
         self.global_step = 0
-        # assert
-        assert not (self.config.double_layer and self.config.joint_logprob), (
-            "double_layer and joint_logprob can not be set at the same time"
-        )
 
-        # rl model init
-        if self.config.value_after_vlm:
-            proj_width = 2048
-        else:
-            proj_width = 1024
-
-        # q head in action space
-        if self.config.add_q_head:
-            if self.config.q_head_type == "default":
-                self.q_head = QHead(
-                    hidden_size=proj_width,
-                    action_feature_dim=self.config.action_chunk * self.config.action_env_dim,
-                    hidden_dims=[128, 64],
-                    output_dim=1,
-                    train_action_encoder=False,
+        #TODO: was ist hier der Input fuer den critic, welche encoder werden gebraucht
+        # Image encoders (one per camera view)
+        self.encoders = nn.ModuleList()
+        encoder_out_dim = 0
+        sample_x = torch.randn(1, *self.cfg.image_size)
+        for img_id in range(self.cfg.image_num):
+            self.encoders.append(
+                ResNetEncoder(
+                    sample_x, out_dim=256, encoder_cfg=self.cfg.encoder_config
                 )
-        # value head
-        action_out_dim = self.config.action_chunk * self.config.action_env_dim
-        if self.config.add_value_head:
-            if self.config.config_name in ["pi05_maniskill", "pi05_libero"]:
-                value_head_hidden_sizes = (1024, 512, 256)
-            else:
-                value_head_hidden_sizes = (512, 256, 128)
-            value_head_activation = "relu"
-            self.value_head = ValueHead(
-                input_dim=proj_width,
-                hidden_sizes=value_head_hidden_sizes,
-                output_dim=action_out_dim,
-                activation=value_head_activation,
-                bias_last=True,
             )
-            # # noise-space value head (operates on flattened noise chunk)
-            # noise_value_input_dim = self.config.action_chunk * self.config.action_env_dim
-            # self.noise_value_head = ValueHead(
-            #     input_dim=noise_value_input_dim,
-            #     hidden_sizes=value_head_hidden_sizes,
-            #     output_dim=1,
-            #     activation=value_head_activation,
-            #     bias_last=True,
-            # )
-        self.use_vlm_value = getattr(self.config, "value_after_vlm", False) and getattr(
-            self.config, "add_value_head", False
+            encoder_out_dim += self.encoders[img_id].out_dim
+
+        # State encoder
+        self.state_proj = nn.Sequential(
+            *make_mlp(
+                in_channels=self.cfg.state_dim,
+                mlp_channels=[
+                    self.cfg.state_latent_dim,
+                ],
+                act_builder=nn.Tanh,
+                last_act=True,
+                use_layer_norm=True,
+            )
+        )
+        init_mlp_weights(self.state_proj, nonlinearity="tanh")
+
+        # Action space critic
+        self.action_critic = QHead(hidden_size=encoder_out_dim + self.cfg.state_latent_dim, 
+                                   action_feature_dim=self.cfg.action_chunk * self.cfg.action_env_dim, 
+                                   hidden_dims=[512, 256], 
+                                   train_action_encoder=False)
+        # Noise space critic
+        self.noise_critic = QHead(hidden_size=encoder_out_dim + self.cfg.state_latent_dim, 
+                                  action_feature_dim=self.cfg.noise_dim, # Achtung gibts noch nicht
+                                  hidden_dims=[512, 256], 
+                                  train_action_encoder=False)
+        # Noise policy head
+        self.noise_policy = GaussianTanhPolicy(
+            obs_dim=encoder_out_dim + self.cfg.state_latent_dim,
+            action_dim=self.cfg.noise_dim,
+            hidden_dims=[128, 128, 128],
         )
 
-        # noise-space critic
-        self.noise_head = ExploreNoiseNet(
-            in_dim=1024,
-            out_dim=self.config.action_dim,
-            hidden_dims=[128, 64],
-            activation_type="tanh",
-            noise_logvar_range=self.config.noise_logvar_range,
-            noise_scheduler_type="learn",
-        )
-        # noise-space policy: predict noise chunk
-        policy_hidden = [128, 64]
-        self.noise_policy = nn.Sequential(
-            nn.Linear(proj_width, policy_hidden[0]),
-            nn.Tanh(),
-            nn.Linear(policy_hidden[0], policy_hidden[1]),
-            nn.Tanh(),
-            nn.Linear(policy_hidden[1], action_out_dim),
-        )
+        # is it ugly to load the openpi model here?
+        self.openpi = self.load_openpi(config) # config mismatch?
+        # Freeze OpenPI parameters
+        for p in self.openpi.parameters():
+            p.requires_grad = False
+        self.openpi.eval()
 
         for name, module in self.named_modules():
             # Set _fsdp_wrap_name to the last part of the path (e.g., "model.action_in_proj" -> "action_in_proj")
             path_parts = name.split(".")
             setattr(module, "_fsdp_wrap_name", path_parts[-1] if path_parts else name)
+
+    def load_openpi(self, cfg):
+        # copied from openpi init
+        from openpi.training import checkpoints as _checkpoints
+        # config
+        config_name = getattr(cfg.openpi, "config_name", None)
+        actor_train_config = get_openpi_config(config_name, model_path=cfg.model_path)
+        actor_model_config = actor_train_config.model
+        actor_model_config = OpenPi0Config(**actor_model_config.__dict__)
+
+        # load model
+        checkpoint_dir = download.maybe_download(str(cfg.model_path))
+        weight_paths = sorted(glob.glob(os.path.join(checkpoint_dir, "*.safetensors")))
+        if not weight_paths:
+            weight_paths = [os.path.join(checkpoint_dir, "model.safetensors")]
+
+        model: PI0Pytorch = PI0Pytorch(
+            actor_model_config
+        )
+        for weight_path in weight_paths:
+            safetensors.torch.load_model(model, weight_path, strict=False)
+        model.paligemma_with_expert.to_bfloat16_for_selected_params("bfloat16")
+        # wrappers
+        repack_transforms = transforms.Group()
+        default_prompt = None
+        # load data stats
+        data_config = actor_train_config.data.create(
+            actor_train_config.assets_dirs, actor_model_config
+        )
+
+        norm_stats = None
+        if norm_stats is None:
+            # We are loading the norm stats from the checkpoint instead of the config assets dir to make sure
+            # that the policy is using the same normalization stats as the original training process.
+            if data_config.asset_id is None:
+                raise ValueError("Asset id is required to load norm stats.")
+            norm_stats = _checkpoints.load_norm_stats(checkpoint_dir, data_config.asset_id)
+
+        model.setup_wrappers(
+            transforms=[
+                *repack_transforms.inputs,
+                transforms.InjectDefaultPrompt(default_prompt),
+                *data_config.data_transforms.inputs,
+                transforms.Normalize(
+                    norm_stats, use_quantiles=data_config.use_quantile_norm
+                ),
+                *data_config.model_transforms.inputs,
+            ],
+            output_transforms=[
+                *data_config.model_transforms.outputs,
+                transforms.Unnormalize(
+                    norm_stats, use_quantiles=data_config.use_quantile_norm
+                ),
+                *data_config.data_transforms.outputs,
+                *repack_transforms.outputs,
+            ],
+        )
+        return model
 
     def set_global_step(self, global_step):
         self.global_step = global_step
@@ -263,10 +318,34 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
         )
         outputs["actions"] = outputs["actions"][:, : self.config.action_chunk]
         return outputs
+    
+    def get_feature(self, obs):
+        """Extract features from observations (images + states)"""
+        visual_features = []
+        # from image_keys to image_num
+        for img_id in range(self.cfg.image_num):
+            if img_id == 0:
+                images = obs["main_images"]
+            else:
+                images = obs["extra_view_images"][:, img_id - 1]
+            if images.shape[3] == 3:
+                # [B, H, W, C] -> [B, C, H, W]
+                images = images.permute(0, 3, 1, 2)
+            visual_features.append(self.encoders[img_id](images))
+        visual_feature = torch.cat(visual_features, dim=-1)
 
-    def forward(self, forward_type=ForwardType.DEFAULT, **kwargs):
+        state_feature = self.state_proj(obs["states"])
+        full_feature = torch.cat([visual_feature, state_feature], dim=-1)
+
+        return full_feature, visual_feature
+
+    def forward(self, forward_type=ForwardType.DEFAULT, next_obs=None, **kwargs):
         if forward_type == ForwardType.SFT:
             return self.sft_forward(**kwargs)
+        elif forward_type == ForwardType.SAC:
+            return self.sac_forward_action_space(next_obs=next_obs, **kwargs)
+        elif forward_type == ForwardType.SAC_Q:
+            return self.sac_q_forward(next_obs=next_obs, **kwargs)
         elif forward_type == ForwardType.DEFAULT:
             return self.default_forward(**kwargs)
         else:
@@ -276,6 +355,25 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
         observation = data["observation"]
         actions = data["actions"]
         return super().forward(observation, actions)
+    
+    
+    def sac_forward_action_space(self, next_obs, **kwargs):
+        full_feature, visual_features = self.get_feature(next_obs)
+        noise = self.noise_policy(visual_features)
+        actions, log_probs = self.openpi.sample_actions(device=next_obs["states"].device, observation=next_obs, noise=noise) 
+        return actions, log_probs
+    
+    def sac_q_forward(self, next_obs, **kwargs):
+        full_feature, visual_features = self.get_feature(next_obs)
+        noise = self.noise_policy(visual_features)
+        actions, _ = self.openpi.sample_actions(device=next_obs["states"].device, observation=next_obs, noise=noise) 
+        if self.config.chunk_critic_input:
+            critic_action_input = actions[:, : self.config.action_chunk * self.config.action_env_dim]
+        else:
+            critic_action_input = actions
+        q_value_action = self.action_critic(full_feature, critic_action_input)
+        q_value_noise = self.noise_critic(full_feature, noise)
+        return q_value_action, q_value_noise
 
     def default_forward(
         self,
