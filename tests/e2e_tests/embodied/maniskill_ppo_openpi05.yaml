@@ -20,7 +20,7 @@ cluster:
 runner:
   task_type: embodied
   logger:
-    log_path: /workspace/results/
+    log_path: /workspace/results/maniskill_ppo_openpi05
     project_name: rlinf
     experiment_name: "ci-test"
     logger_backends: null # ['tensorboard', 'wandb', 'swanlab']
@@ -31,7 +31,7 @@ runner:
   only_eval: False
   ckpt_path: null # Optional: .pt file or None, if None, will use the checkpoint in rollout.model.model_path
   val_check_interval: -1
-  save_interval: 50
+  save_interval: -1
 
   resume_dir: null
 
