@@ -15,16 +15,15 @@
 from glob import glob
 import math
 import os
-from pyexpat import model
-import random
 from collections.abc import Sequence
-from dataclasses import datacla, dataclass
-from xml.parsers.expat import modelss, field
+from dataclasses import  dataclass
+from dataclasses import field
 from typing import Any, Literal
 
 import jax
 from matplotlib import transforms
 import numpy as np
+from openpi.shared import download
 import safetensors
 import torch
 import torch.nn as nn
@@ -33,7 +32,6 @@ from openpi.models import model as _model
 from openpi.models.pi0_config import Pi0Config
 from openpi.models_pytorch.pi0_pytorch import PI0Pytorch, make_att_2d_masks
 
-from examples.searchr1 import download
 from rlinf.models.embodiment.base_policy import BasePolicy, ForwardType
 from rlinf.models.embodiment.modules.gaussian_policy import GaussianTanhPolicy
 from rlinf.models.embodiment.modules.q_head import QHead
@@ -43,11 +41,11 @@ from rlinf.models.embodiment.openpi.dataconfig import get_openpi_config
 from rlinf.models.embodiment.openpi.openpi_action_model import OpenPi0Config
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class NoisePolicyConfig:
     # TODO: clean
     # config for rl
-    config_name: str = "pi0_libero"  # pi0_libero, pi05_libero, pi0_maniskill, pi05_maniskill, pi0_metaworld, pi05_metaworld
+    # config_name: str = "pi0_libero"  # pi0_libero, pi05_libero, pi0_maniskill, pi05_maniskill, pi0_metaworld, pi05_metaworld
     num_images_in_input: int = 2  # number of images in input
     encoder_config: dict[str, Any] = field(default_factory=dict)
     image_size: list[int] = field(default_factory=list)
@@ -56,9 +54,11 @@ class NoisePolicyConfig:
     state_dim: int = 29
     state_latent_dim: int = 64
     # models
+    chunk_critic: bool = False  # critic for action chunk or one action
     action_critic_hidden_dims: list[int] = field(default_factory=lambda: [512, 256])
     noise_critic_hidden_dims: list[int] = field(default_factory=lambda: [512, 256])
     policy_hidden_dims: list[int] = field(default_factory=lambda: [128, 128, 128])
+    noise_dim: int = 32 # dimension of one noise action which is denoised
 
     # hyper-parameters
     action_chunk: int = 5  # action chunk
@@ -73,13 +73,24 @@ class NoisePolicyConfig:
     chunk_critic_input: bool = False  # use only the action chunk for critic estimation
     value_after_vlm: bool = False  # value after vlm, pi05 mode
     value_vlm_mode: str = "mean_token"  # last_token, mean_token, first_token
-    openpi: dict[str, Any] = field(default_factory=dict)
+    openpi: OpenPi0Config = field(default_factory=OpenPi0Config)
+    
+    def update_from_dict(self, config_dict):
+        for key, value in config_dict.items():
+            if hasattr(self, key):
+                self.__setattr__(key, value)
+        self._update_info()
 
-@dataclass(frozen=True)
-class OpenPIConfig(OpenPi0Config):
-    # hyper-parameters
-    action_chunk: int = 5  # action chunk
-    action_env_dim: int = 7  # for environment action dim
+    def _update_info(self):
+        assert self.encoder_config['model_path'] is not None, "Please specify the encoder model_path."
+        assert "ckpt_name" in self.encoder_config, (
+            "Please specify the ckpt_name in encoder_config to load pretrained encoder weights."
+        )
+        ckpt_path = os.path.join(self.encoder_config['model_path'], self.encoder_config["ckpt_name"])
+        assert os.path.exists(ckpt_path), (
+            f"Pretrained encoder weights not found at {ckpt_path} with model path {self.encoder_config['model_path']} and encoder ckpt name {self.encoder_config['ckpt_name']}"
+        )
+        self.encoder_config["ckpt_path"] = ckpt_path
 
 
 class NoisePolicyForOpenPI(BasePolicy):
@@ -87,7 +98,7 @@ class NoisePolicyForOpenPI(BasePolicy):
     Noise policy model for reinforcement learning action prediction.
     """
 
-    config: NoisePolicyConfig
+    # config: NoisePolicyConfig
 
     # Tells fsdp what not to split when doing auto-wrapping, do we need it since we're not training the openpi model?
     # TODO
@@ -116,16 +127,14 @@ class NoisePolicyForOpenPI(BasePolicy):
             "time_mlp_out",
         ]
 
-    def __init__(
-        self,
-        config: NoisePolicyConfig,
-    ):
+    def __init__(self, config: NoisePolicyConfig, openpi_model: PI0Pytorch):
         # Override `sample_actions` to prevent parent class polymorphic call
         sample_actions_func = self.sample_actions
-        super().__init__(config)
+        super().__init__()
         self.sample_actions = sample_actions_func
         self.global_step = 0
-
+        self.config = config
+        self.openpi = openpi_model
         #TODO: was ist hier der Input fuer den critic, welche encoder werden gebraucht
         # Image encoders (one per camera view)
         self.encoders = nn.ModuleList()
@@ -154,70 +163,48 @@ class NoisePolicyForOpenPI(BasePolicy):
         init_mlp_weights(self.state_proj, nonlinearity="tanh")
 
         # Action space critic
+        if self.config.chunk_critic:
+            action_feature_dim = self.config.action_chunk * self.config.action_env_dim
+            noise_dim = self.config.noise_dim * self.config.action_chunk
+        else:
+            action_feature_dim = self.config.action_env_dim
+            noise_dim = self.config.noise_dim
+
         self.action_critic = QHead(hidden_size=encoder_out_dim + self.config.state_latent_dim, 
-                                   action_feature_dim=self.config.action_chunk * self.config.action_env_dim, 
+                                   action_feature_dim=action_feature_dim, 
                                    hidden_dims=self.config.action_critic_hidden_dims,
+                                   output_dim=1,
                                    train_action_encoder=False)
         # Noise space critic
         self.noise_critic = QHead(hidden_size=encoder_out_dim + self.config.state_latent_dim, 
-                                  action_feature_dim=self.config.noise_dim, # Achtung gibts noch nicht
+                                  action_feature_dim=noise_dim, 
                                   hidden_dims=self.config.noise_critic_hidden_dims, 
+                                  output_dim=1,
                                   train_action_encoder=False)
         # Noise policy head
         self.noise_policy = GaussianTanhPolicy(
             obs_dim=encoder_out_dim + self.config.state_latent_dim,
-            action_dim=self.config.noise_dim,
+            action_dim=self.config.action_dim,
             hidden_dims=self.config.policy_hidden_dims,
         )
 
-        # is it ugly to load the openpi model here?
-        self.openpi = self.load_openpi(config) 
+        # setup openpi (otherwise no method access)
+        # self.setup_openpi(openpi_model, data_config, norm_stats) 
         # Freeze OpenPI parameters
-        for p in self.openpi.parameters():
-            p.requires_grad = False
-        self.openpi.eval()
+        # for p in self.openpi.parameters():
+        #     p.requires_grad = False
+        # self.openpi.eval()
 
         for name, module in self.named_modules():
             # Set _fsdp_wrap_name to the last part of the path (e.g., "model.action_in_proj" -> "action_in_proj")
             path_parts = name.split(".")
             setattr(module, "_fsdp_wrap_name", path_parts[-1] if path_parts else name)
 
-    def load_openpi(self, cfg):
-        # copied from openpi init
-        from openpi.training import checkpoints as _checkpoints
-        # config
-        config_name = getattr(cfg.openpi, "config_name", None)
-        actor_train_config = get_openpi_config(config_name, model_path=cfg.model_path)
-        actor_model_config = actor_train_config.model
-        actor_model_config = OpenPi0Config(**actor_model_config.__dict__)
+    def setup_openpi(self, model: PI0Pytorch, data_config, norm_stats):
 
-        # load model
-        checkpoint_dir = download.maybe_download(str(cfg.model_path))
-        weight_paths = sorted(glob.glob(os.path.join(checkpoint_dir, "*.safetensors")))
-        if not weight_paths:
-            weight_paths = [os.path.join(checkpoint_dir, "model.safetensors")]
-
-        model: PI0Pytorch = PI0Pytorch(
-            actor_model_config
-        )
-        for weight_path in weight_paths:
-            safetensors.torch.load_model(model, weight_path, strict=False)
-        model.paligemma_with_expert.to_bfloat16_for_selected_params("bfloat16")
         # wrappers
         repack_transforms = transforms.Group()
         default_prompt = None
-        # load data stats
-        data_config = actor_train_config.data.create(
-            actor_train_config.assets_dirs, actor_model_config
-        )
-
-        norm_stats = None
-        if norm_stats is None:
-            # We are loading the norm stats from the checkpoint instead of the config assets dir to make sure
-            # that the policy is using the same normalization stats as the original training process.
-            if data_config.asset_id is None:
-                raise ValueError("Asset id is required to load norm stats.")
-            norm_stats = _checkpoints.load_norm_stats(checkpoint_dir, data_config.asset_id)
 
         model.setup_wrappers(
             transforms=[
@@ -238,7 +225,6 @@ class NoisePolicyForOpenPI(BasePolicy):
                 *repack_transforms.outputs,
             ],
         )
-        return model
 
     def set_global_step(self, global_step):
         self.global_step = global_step
@@ -340,7 +326,7 @@ class NoisePolicyForOpenPI(BasePolicy):
         elif forward_type == ForwardType.SAC_Q:
             return self.sac_q_forward(next_obs=next_obs, **kwargs)
         elif forward_type == ForwardType.DISTILL_Q:
-            return self.sac_q_noise_forward(obs=curr_obs, **kwargs)
+            return self.sac_q_noise_forward(curr_obs=next_obs, **kwargs)
         elif forward_type == ForwardType.DEFAULT:
             return self.default_forward(**kwargs)
         else:
@@ -373,8 +359,8 @@ class NoisePolicyForOpenPI(BasePolicy):
         full_feature, visual_features = self.get_feature(curr_obs)
         noise = self.noise_policy(visual_features)
         actions, _ = self.openpi.sample_actions(device=curr_obs["states"].device, observation=curr_obs, noise=noise) 
-        current_q_values = self.action_critic(full_feature, actions)
-        q_values_noise = self.noise_critic(full_feature, noise)
+        current_q_values = self.action_critic(visual_features, actions) # visual or full here?
+        q_values_noise = self.noise_critic(visual_features, noise)
         return current_q_values, q_values_noise
 
     def default_forward(
@@ -435,7 +421,7 @@ class NoisePolicyForOpenPI(BasePolicy):
             "prompt": env_obs["task_descriptions"],
         }
         # state observation
-        if "calvin" in self.config.config_name:
+        if "calvin" in self.config.openpi.config_name:
             state = env_obs["states"]
             processed_obs["observation/state_ee_pos"] = state[:, :3]
             processed_obs["observation/state_ee_rot"] = state[:, 3:6]
@@ -549,31 +535,29 @@ class NoisePolicyForOpenPI(BasePolicy):
         # )
 
         # compute policy-predicted noise chunk (flattened)
-        noise_chunk = self.noise_policy(observation.state)  # [bsize, action_chunk*action_env_dim]
-
-        # Call parent PI0Pytorch.sample_actions with single step (num_steps=1)
-        action_chunk = super().sample_actions(device, observation, noise=noise_chunk, num_steps=1)
+        full_feature, visual_features = self.get_feature(observation)
+        noise_chunk = self.noise_policy(visual_features)
+        actions, log_probs = self.openpi.sample_actions(device=observation.device, observation=observation, noise=noise_chunk)
 
         # Compute values for RL 
-        values_action = self.value_head(action_chunk)  
-        values_noise = self.noise_head(noise_chunk) 
+        # qs_action = self.action_critic(visual_features, actions)  
+        qs_action = torch.zeros((bsize), device=device)
 
         # Placeholder logprobs (parent's sample_actions doesn't return them by default)
-        log_probs = torch.zeros(
-            (bsize, self.config.action_chunk, self.config.action_env_dim),
-            device=device,
-        )
+        # log_probs = torch.zeros(
+        #     (bsize, self.config.action_chunk, self.config.action_env_dim),
+        #     device=device,
+        # )
 
         # chains: [initial noise, denoised actions]
-        chains = torch.stack([noise_chunk, action_chunk], dim=1)
+        chains = torch.stack([noise_chunk, actions], dim=1)
         denoise_inds = torch.zeros((bsize, 1), dtype=torch.long, device=device)
 
         return {
-            "actions": action_chunk,
+            "actions": actions,
             "chains": chains,
             "prev_logprobs": log_probs,
-            "prev_values": values_action,
-            "prev_values_noise": values_noise,
+            "prev_values": qs_action,
             "denoise_inds": denoise_inds,
         }
 

@@ -21,6 +21,7 @@ class ForwardType(Enum):
     SFT = "sft"
     SAC = "sac"
     SAC_Q = "sac_q"
+    DISTILL_Q = "distill_q"
     CROSSQ = "crossq"
     CROSSQ_Q = "crossq_q"
 

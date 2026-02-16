@@ -1,2 +1,0 @@
-encoder_config:
-  ckpt_name: "resnet10_pretrained.pt"

@@ -17,13 +17,15 @@ import os
 from typing import Optional, Union
 
 import numpy as np
+import ray
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from omegaconf import DictConfig
 
 from rlinf.config import SupportedModel
-from rlinf.data.replay_buffer import SACReplayBuffer
+from rlinf.data.embodied_io_struct import Trajectory
+from rlinf.data.replay_buffer import TrajectoryReplayBuffer
 from rlinf.hybrid_engines.fsdp import (
     FSDP,
     FSDPModule,
@@ -34,6 +36,7 @@ from rlinf.utils.distributed import all_reduce_dict
 from rlinf.utils.metric_utils import (
     append_to_dict,
     compute_rollout_metrics,
+    compute_split_num,
 )
 from rlinf.utils.nested_dict_process import (
     concat_batch,
@@ -56,6 +59,7 @@ class EmbodiedNoiseSACFSDPPolicy(EmbodiedFSDPActor):
         self.update_step = 0
 
     def init_worker(self):
+        breakpoint()
         self.setup_model_and_optimizer(initialize_target=True)
         self.setup_sac_components()
         self.soft_update_target_model(tau=1.0)
@@ -240,10 +244,23 @@ class EmbodiedNoiseSACFSDPPolicy(EmbodiedFSDPActor):
         """Initialize SAC-specific components"""
         # Initialize replay buffer
         seed = self.cfg.actor.get("seed", 1234)
-        self.replay_buffer = SACReplayBuffer(
-            capacity=self.cfg.algorithm.replay_buffer_capacity,
-            device=self.device,
+        auto_save_path = self.cfg.algorithm.replay_buffer.get("auto_save_path", None)
+        if auto_save_path is None:
+            auto_save_path = os.path.join(
+                self.cfg.runner.logger.log_path, f"replay_buffer/rank_{self._rank}"
+            )
+        else:
+            auto_save_path = os.path.join(auto_save_path, f"rank_{self._rank}")
+        self.replay_buffer = TrajectoryReplayBuffer(
             seed=seed,
+            enable_cache=self.cfg.algorithm.replay_buffer.enable_cache,
+            cache_size=self.cfg.algorithm.replay_buffer.cache_size,
+            sample_window_size=self.cfg.algorithm.replay_buffer.sample_window_size,
+            auto_save=self.cfg.algorithm.replay_buffer.get("auto_save", False),
+            auto_save_path=auto_save_path,
+            trajectory_format=self.cfg.algorithm.replay_buffer.get(
+                "trajectory_format", "pt"
+            ),
         )
 
         self.critic_actor_ratio = self.cfg.algorithm.get("critic_actor_ratio", 1)
@@ -277,11 +294,24 @@ class EmbodiedNoiseSACFSDPPolicy(EmbodiedFSDPActor):
         super().recv_rollout_batch(input_channel)
         self.replay_buffer.add_rollout_batch(self.rollout_batch)
 
-    async def recv_demo_data(self, input_channel: Channel):
-        demo_data = await input_channel.get(async_op=True).async_wait()
-        self.demo_buffer = SACReplayBuffer.create_from_buffer(
-            demo_data, seed=self.cfg.actor.seed
-        )
+    async def recv_rollout_trajectories(self, input_channel: Channel) -> None:
+        """
+        Receive rollout trajectories from rollout workers.
+
+        Args:
+            input_channel: The input channel to read from.
+        """
+        send_num = self._component_placement.get_world_size("rollout") * self.stage_num
+        recv_num = self._component_placement.get_world_size("actor")
+        split_num = compute_split_num(send_num, recv_num)
+
+        recv_list = []
+
+        for _ in range(split_num):
+            trajectory: Trajectory = await input_channel.get(async_op=True).async_wait()
+            recv_list.append(trajectory)
+
+        self.replay_buffer.add_trajectories(recv_list)
 
     def forward_critic(self, batch):
         use_crossq = self.cfg.algorithm.get("q_head_type", "default") == "crossq"
@@ -300,7 +330,7 @@ class EmbodiedNoiseSACFSDPPolicy(EmbodiedFSDPActor):
             )
             next_state_log_pi = next_state_log_pi.sum(dim=-1, keepdim=True)
             if not use_crossq:
-                all_qf_next_target, all_qf_noise_next_target = self.target_model(
+                all_qf_next_target = self.target_model(
                     forward_type=ForwardType.SAC_Q,
                     obs=next_obs,
                     actions=next_state_actions,
@@ -344,8 +374,9 @@ class EmbodiedNoiseSACFSDPPolicy(EmbodiedFSDPActor):
             else:
                 raise NotImplementedError(f"{bootstrap_type=} is not supported!")
 
+        # current Q-values
         if not use_crossq:
-            all_data_q_values, all_noise_q_values = self.model(
+            all_data_q_values = self.model(
                 forward_type=ForwardType.SAC_Q,
                 obs=curr_obs,
                 actions=batch["action"]
@@ -390,8 +421,8 @@ class EmbodiedNoiseSACFSDPPolicy(EmbodiedFSDPActor):
         critic_loss = F.mse_loss(
             all_data_q_values, target_q_values.expand_as(all_data_q_values)
         )
-        critic_distill_loss = 0.5*F.mse_loss(all_noise_q_values, all_data_q_values.detach())
-        return critic_loss, critic_distill_loss
+
+        return critic_loss
     
     def forward_distill(self, batch):
         curr_obs = batch["transitions"]["obs"]
@@ -419,9 +450,8 @@ class EmbodiedNoiseSACFSDPPolicy(EmbodiedFSDPActor):
         log_pi_per_chunk = log_pi.sum(dim=-1)  # sum over action_env_dim, keep chunk dimension
 
         # Query Q-values for the current policy actions
-        # TODO: only noise critic
-        all_qf_pi = self.model(
-            forward_type=ForwardType.SAC_Q,
+        _, q_noise = self.model(
+            forward_type=ForwardType.DISTILL_Q,
             obs=curr_obs,
             actions=pi,
             shared_feature=shared_feature,
@@ -430,7 +460,7 @@ class EmbodiedNoiseSACFSDPPolicy(EmbodiedFSDPActor):
 
         # all_qf_pi has shape [batch_size, num_chunks] with one Q-value per chunk
         # Compute per-chunk actor loss and average
-        actor_loss = ((self.alpha * log_pi_per_chunk) - all_qf_pi).mean()
+        actor_loss = ((self.alpha * log_pi_per_chunk) - q_noise).mean()
 
         # Entropy is the mean of negative log probabilities
         entropy = -log_pi_per_chunk.mean()
@@ -486,9 +516,9 @@ class EmbodiedNoiseSACFSDPPolicy(EmbodiedFSDPActor):
         self.qf_action_lr_scheduler.step()
 
         metrics_data = {
-            "sac/critic_loss": np.mean(gbs_critic_loss),
-            "critic/lr": self.qf_action_optimizer.param_groups[0]["lr"],
-            "critic/grad_norm": qf_grad_norm,
+            "sac/action_critic_loss": np.mean(gbs_critic_loss),
+            "action_critic/lr": self.qf_action_optimizer.param_groups[0]["lr"],
+            "action_critic/grad_norm": qf_grad_norm,
         }
 
         if self.update_step % self.critic_actor_ratio == 0 and train_actor:
@@ -548,6 +578,9 @@ class EmbodiedNoiseSACFSDPPolicy(EmbodiedFSDPActor):
                     "actor/grad_norm": actor_grad_norm,
                     "actor/entropy": np.mean(gbs_entropy),
                     "alpha/grad_norm": alpha_grad_norm,
+                    "sac/distill_loss": distill_loss.item(),
+                    "noise_critic/lr": self.qf_noise_optimizer.param_groups[0]["lr"],
+                    "noise_critic/grad_norm": noise_q_grad_norm,
                 }
             )
         # Soft update target network
