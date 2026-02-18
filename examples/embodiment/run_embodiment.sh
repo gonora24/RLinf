@@ -36,6 +36,7 @@ echo "Using ROBOT_PLATFORM=$ROBOT_PLATFORM"
 
 # enable ray debug
 export RAY_DEBUG=1
+# export RAY_DEBUG_POST_MORTEM=1
 
 echo "Using Python at $(which python)"
 LOG_DIR="${REPO_PATH}/logs/$(date +'%Y%m%d-%H:%M:%S')-${CONFIG_NAME}" #/$(date +'%Y%m%d-%H:%M:%S')"

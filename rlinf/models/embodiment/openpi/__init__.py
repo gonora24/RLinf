@@ -47,6 +47,7 @@ def get_model(cfg: DictConfig, torch_dtype=None):
     if not weight_paths:
         weight_paths = [os.path.join(checkpoint_dir, "model.safetensors")]
 
+    breakpoint()
     model: OpenPi0ForRLActionPrediction = OpenPi0ForRLActionPrediction(
         actor_model_config
     )

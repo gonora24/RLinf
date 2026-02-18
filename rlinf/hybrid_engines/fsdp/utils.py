@@ -181,6 +181,28 @@ def get_fsdp_wrap_policy(module, config=None, is_lora=False, model_type=None):
             functools.partial(lambda_auto_wrap_policy, lambda_fn=is_state_proj)
         )
 
+    if SupportedModel(model_type) == SupportedModel.NOISE_POLICY_OPENPI:
+        # Wrap ResNetEncoders (your image encoders)
+        from rlinf.models.embodiment.modules.resnet_utils import ResNetEncoder
+        encoder_policy = functools.partial(
+            _module_wrap_policy, module_classes={ResNetEncoder}
+        )
+        policies.append(encoder_policy)
+        
+        # Wrap QHead instances (your critics)  
+        from rlinf.models.embodiment.modules.q_head import QHead
+        q_head_policy = functools.partial(
+            _module_wrap_policy, module_classes={QHead}
+        )
+        policies.append(q_head_policy)
+        
+        # Wrap GaussianTanhPolicy (your noise policy)
+        from rlinf.models.embodiment.modules.gaussian_policy import GaussianTanhPolicy
+        noise_policy_wrap = functools.partial(
+            _module_wrap_policy, module_classes={GaussianTanhPolicy}
+        )
+        policies.append(noise_policy_wrap)
+
     if hasattr(module, "value_head"):
         from rlinf.models.embodiment.modules.value_head import ValueHead
 

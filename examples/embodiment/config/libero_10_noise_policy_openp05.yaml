@@ -41,11 +41,11 @@ algorithm:
   group_size: 1
   reward_coef: 1.0
 
-replay_buffer:
-  enable_cache: True
-  cache_size: 1000
-  sample_window_size: 1000
-  min_buffer_size: 50
+  replay_buffer:
+    enable_cache: True
+    cache_size: 1000
+    sample_window_size: 1000
+    min_buffer_size: 50
 
 env:
   group_name: "EnvGroup"
@@ -98,6 +98,8 @@ actor:
 
   optim:
     lr: 5.0e-6
+    action_q_lr: 5.0e-6
+    noise_q_lr: 5.0e-6
     value_lr: 1.0e-4
     adam_beta1: 0.9
     adam_beta2: 0.95

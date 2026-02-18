@@ -93,7 +93,7 @@ class NoisePolicyConfig:
         self.encoder_config["ckpt_path"] = ckpt_path
 
 
-class NoisePolicyForOpenPI(BasePolicy):
+class NoisePolicyForOpenPI(nn.Module, BasePolicy):
     """
     Noise policy model for reinforcement learning action prediction.
     """
@@ -135,6 +135,10 @@ class NoisePolicyForOpenPI(BasePolicy):
         self.global_step = 0
         self.config = config
         self.openpi = openpi_model
+        # Freeze OpenPI backbone
+        for p in self.openpi.parameters():
+            p.requires_grad = False
+        self.openpi.eval()
         #TODO: was ist hier der Input fuer den critic, welche encoder werden gebraucht
         # Image encoders (one per camera view)
         self.encoders = nn.ModuleList()

@@ -59,10 +59,9 @@ class EmbodiedNoiseSACFSDPPolicy(EmbodiedFSDPActor):
         self.update_step = 0
 
     def init_worker(self):
-        breakpoint()
-        self.setup_model_and_optimizer(initialize_target=True)
+        self.setup_model_and_optimizer(initialize_target=False)
         self.setup_sac_components()
-        self.soft_update_target_model(tau=1.0)
+        # self.soft_update_target_model(tau=1.0) no target model initialized
         if self.cfg.actor.get("enable_offload", False):
             self.offload_param_and_grad()
             self.offload_optimizer()
@@ -127,7 +126,7 @@ class EmbodiedNoiseSACFSDPPolicy(EmbodiedFSDPActor):
             for name, param in model.named_parameters():
                 if name in self.store_requires_grad_param_name:
                     param.requires_grad = True
-                if param.requires_grad:
+                if param.requires_grad: #TODO: what about encoder?
                     if "action_critic" in name or "model.action_critic" in name:
                         params_action_critic.append(param)
                     elif "noise_critic" in name or "model.noise_critic" in name:
@@ -243,6 +242,7 @@ class EmbodiedNoiseSACFSDPPolicy(EmbodiedFSDPActor):
     def setup_sac_components(self):
         """Initialize SAC-specific components"""
         # Initialize replay buffer
+        breakpoint()
         seed = self.cfg.actor.get("seed", 1234)
         auto_save_path = self.cfg.algorithm.replay_buffer.get("auto_save_path", None)
         if auto_save_path is None:

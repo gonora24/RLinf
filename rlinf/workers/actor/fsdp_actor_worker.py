@@ -1016,6 +1016,7 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
         Initialize the actor worker. build the model and use corresponding training backend,
         if needed, offload model parameters and optimizer states to CPU.
         """
+        breakpoint()
         self.setup_model_and_optimizer()
 
         if self.enable_offload:

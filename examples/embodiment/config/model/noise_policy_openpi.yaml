@@ -13,6 +13,10 @@ state_latent_dim: 64
 
 chunk_critic: False
 
+# LoRA settings
+is_lora: False
+lora_rank: 32
+
 
 openpi:
   config_name: "pi05_libero"

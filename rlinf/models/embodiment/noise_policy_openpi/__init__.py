@@ -38,7 +38,6 @@ def get_model(cfg: DictConfig, torch_dtype=torch.bfloat16):
             if hasattr(openpi_config, key):
                 openpi_config.__dict__[key] = val
 
-    breakpoint()
     # load openpi_model
     checkpoint_dir = download.maybe_download(str(cfg.model_path))
     weight_paths = sorted(glob.glob(os.path.join(checkpoint_dir, "*.safetensors")))
@@ -76,7 +75,6 @@ def get_model(cfg: DictConfig, torch_dtype=torch.bfloat16):
     cfg_dict.pop("openpi", None)  # Remove openpi section since we already handled it
     model_config.update_from_dict(cfg_dict)
     
-    breakpoint()
     noise_model = NoisePolicyForOpenPI(model_config, openpi_model)
     noise_model.setup_wrappers(
         transforms=[
