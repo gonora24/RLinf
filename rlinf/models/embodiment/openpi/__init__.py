@@ -47,7 +47,6 @@ def get_model(cfg: DictConfig, torch_dtype=None):
     if not weight_paths:
         weight_paths = [os.path.join(checkpoint_dir, "model.safetensors")]
 
-    breakpoint()
     model: OpenPi0ForRLActionPrediction = OpenPi0ForRLActionPrediction(
         actor_model_config
     )
@@ -78,18 +77,18 @@ def get_model(cfg: DictConfig, torch_dtype=None):
         transforms=[
             *repack_transforms.inputs,
             transforms.InjectDefaultPrompt(default_prompt),
-            *data_config.data_transforms.inputs,
+            *data_config.data_transforms.inputs, #from DataConfigFactory: transforms env specific obs keys to openpi obs keys
             transforms.Normalize(
                 norm_stats, use_quantiles=data_config.use_quantile_norm
-            ),
-            *data_config.model_transforms.inputs,
+            ), # make sure to use the same normalization stats as the original training process.
+            *data_config.model_transforms.inputs, #from DataConfigFactory: transforms openpi obs keys to model input keys
         ],
         output_transforms=[
-            *data_config.model_transforms.outputs,
+            *data_config.model_transforms.outputs, #from DataConfigFactory: undo model-specific packaging
             transforms.Unnormalize(
                 norm_stats, use_quantiles=data_config.use_quantile_norm
             ),
-            *data_config.data_transforms.outputs,
+            *data_config.data_transforms.outputs, #from DataConfigFactory: transforms model/openpi outputs into env specific actions
             *repack_transforms.outputs,
         ],
     )

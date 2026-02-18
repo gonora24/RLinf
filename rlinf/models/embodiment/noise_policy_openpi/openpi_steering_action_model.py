@@ -1,17 +1,3 @@
-# Copyright 2025 The RLinf Authors.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 from glob import glob
 import math
 import os
@@ -34,7 +20,7 @@ from openpi.models_pytorch.pi0_pytorch import PI0Pytorch, make_att_2d_masks
 
 from rlinf.models.embodiment.base_policy import BasePolicy, ForwardType
 from rlinf.models.embodiment.modules.gaussian_policy import GaussianTanhPolicy
-from rlinf.models.embodiment.modules.q_head import QHead
+from rlinf.models.embodiment.modules.q_head import MultiQHead, QHead
 from rlinf.models.embodiment.modules.resnet_utils import ResNetEncoder
 from rlinf.models.embodiment.modules.utils import init_mlp_weights, make_mlp
 from rlinf.models.embodiment.openpi.dataconfig import get_openpi_config
@@ -69,6 +55,8 @@ class NoisePolicyConfig:
     double_layer: bool = False  # designed for flow-sde without acceleration
     ignore_last: bool = False  # ignore the last action for noise injection
     # critic
+    use_dsrl_sac: bool = False  # use DSRL SAC setup: critic ensemble in noise space
+    num_q_heads: int = 10  # number of Q-heads for critic ensemble
     detach_critic_input: bool = False  # detach critic input with the action expert
     chunk_critic_input: bool = False  # use only the action chunk for critic estimation
     value_after_vlm: bool = False  # value after vlm, pi05 mode
@@ -174,17 +162,27 @@ class NoisePolicyForOpenPI(nn.Module, BasePolicy):
             action_feature_dim = self.config.action_env_dim
             noise_dim = self.config.noise_dim
 
-        self.action_critic = QHead(hidden_size=encoder_out_dim + self.config.state_latent_dim, 
+        if self.config.use_dsrl_sac:
+            # TODO: we need ensemble and no double Q-learning?
+            self.noise_critic = MultiQHead(hidden_size=encoder_out_dim + self.config.state_latent_dim, 
+                                              action_feature_dim=noise_dim, 
+                                              hidden_dims=self.config.noise_critic_hidden_dims, 
+                                              output_dim=1,
+                                              train_action_encoder=False,
+                                              num_q_heads=self.config.num_q_heads)
+            self.action_critic=None   
+        else:
+            self.noise_critic = QHead(hidden_size=encoder_out_dim + self.config.state_latent_dim, 
+                                      action_feature_dim=noise_dim, 
+                                      hidden_dims=self.config.noise_critic_hidden_dims, 
+                                      output_dim=1,
+                                      train_action_encoder=False)
+            self.action_critic = QHead(hidden_size=encoder_out_dim + self.config.state_latent_dim, 
                                    action_feature_dim=action_feature_dim, 
                                    hidden_dims=self.config.action_critic_hidden_dims,
                                    output_dim=1,
                                    train_action_encoder=False)
-        # Noise space critic
-        self.noise_critic = QHead(hidden_size=encoder_out_dim + self.config.state_latent_dim, 
-                                  action_feature_dim=noise_dim, 
-                                  hidden_dims=self.config.noise_critic_hidden_dims, 
-                                  output_dim=1,
-                                  train_action_encoder=False)
+
         # Noise policy head
         self.noise_policy = GaussianTanhPolicy(
             obs_dim=encoder_out_dim + self.config.state_latent_dim,
