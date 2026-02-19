@@ -45,7 +45,7 @@ def main(cfg) -> None:
         from rlinf.workers.actor.fsdp_sac_policy_worker import EmbodiedSACFSDPPolicy
 
         actor_worker_cls = EmbodiedSACFSDPPolicy
-    elif cfg.algorithm.loss_type == "noise_policy_openpi":
+    elif cfg.algorithm.loss_type == "noise_sac":
         from rlinf.workers.actor.fsdp_noise_sac_policy_worker import EmbodiedNoiseSACFSDPPolicy
 
         actor_worker_cls = EmbodiedNoiseSACFSDPPolicy

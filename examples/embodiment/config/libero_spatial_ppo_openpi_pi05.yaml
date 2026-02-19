@@ -22,13 +22,13 @@ runner:
   logger:
     log_path: "../results"
     project_name: rlinf
-    experiment_name: "libero_spatial_ppo_openpi_pi05"
-    logger_backends: ["tensorboard"] # wandb, swanlab, tensorboard
+    experiment_name: "libero_spatial_ppo_openpi_pi05_eval"
+    logger_backends: ["wandb"] # wandb, swanlab, tensorboard
 
   max_epochs: 1000
   max_steps: -1
 
-  only_eval: False
+  only_eval: True
   val_check_interval: -1
   save_interval: 40
 
@@ -42,7 +42,7 @@ algorithm:
   reward_coef: 1.0
 
   rollout_epoch: 8
-  eval_rollout_epoch: 1 # set eval_rollout_epoch > 0 when enable runner.only_eval or runner.val_check_interval > 0
+  eval_rollout_epoch: 2 # set eval_rollout_epoch > 0 when enable runner.only_eval or runner.val_check_interval > 0
 
   reward_type: chunk_level
   logprob_type: chunk_level
@@ -89,11 +89,11 @@ env:
 
   # Override the default values in env/libero_spatial
   train:
-    total_num_envs: 64
+    total_num_envs: 3
     max_episode_steps: 240 # max episode steps for truncation
     max_steps_per_rollout_epoch: 240
   eval:
-    total_num_envs: 500
+    total_num_envs: 32
     auto_reset: True
     ignore_terminations: True
     max_episode_steps: 240

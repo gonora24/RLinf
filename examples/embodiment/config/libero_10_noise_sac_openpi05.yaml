@@ -22,8 +22,8 @@ runner:
   logger:
     log_path: "../results"
     project_name: rlinf
-    experiment_name: "libero_10_noise_sac_openpi_pi05"
-    logger_backends: ["tensorboard"] # wandb, swanlab
+    experiment_name: "libero_10_noise_sac_openpi05"
+    logger_backends: ["wandb"] # wandb, swanlab
 
   max_epochs: 1000
   max_steps: -1
@@ -36,26 +36,26 @@ runner:
   ckpt_path: null 
 
 algorithm:
-  loss_type: noise_space_sac
+  loss_type: noise_sac
 
-replay_buffer:
-  enable_cache: True
-  cache_size: 1000
-  sample_window_size: 1000
-  min_buffer_size: 50
+  replay_buffer:
+    enable_cache: True
+    cache_size: 1000
+    sample_window_size: 1000
+    min_buffer_size: 50
 
 env:
   group_name: "EnvGroup"
   enable_offload: False
 
   train:
-    total_num_envs: 64
+    total_num_envs: 3
     max_episode_steps: 480 # max episode steps for truncation
     max_steps_per_rollout_epoch: 480
     reward_coef: ${algorithm.reward_coef}
     group_size: ${algorithm.group_size}
   eval:
-    total_num_envs: 500
+    total_num_envs: 32
     auto_reset: True
     ignore_terminations: True
     max_episode_steps: 480
@@ -77,9 +77,12 @@ rollout:
 
   model:
     model_path: "/home/i53/student/gorhan/Masterarbeit/RLinf/RLinf-Pi05-LIBERO-SFT"
-    model_type: "openpi"
+    precision: ${actor.model.precision}
+    encoder_config:
+      model_path: "/home/i53/student/gorhan/Masterarbeit/RLinf/RLinf-ResNet10-pretrained"
+      ckpt_name: "resnet10_pretrained.pt"
     openpi:
-      add_value_head: True
+      use_dsrl_sac: True
     # precision: ${actor.model.precision}
 
 actor:
@@ -93,7 +96,13 @@ actor:
   # Override the default values in model/pi0_5
   model:
     model_path: "/home/i53/student/gorhan/Masterarbeit/RLinf/RLinf-Pi05-LIBERO-SFT"
-    num_steps: 4
+    model_type: "noise_sac"
+    encoder_config:
+      model_path: "/home/i53/student/gorhan/Masterarbeit/RLinf/RLinf-ResNet10-pretrained"
+      ckpt_name: "resnet10_pretrained.pt"
+    num_steps: 10
+    num_q_heads: 10
+    use_dsrl_sac: True
 
   optim:
     lr: 5.0e-6

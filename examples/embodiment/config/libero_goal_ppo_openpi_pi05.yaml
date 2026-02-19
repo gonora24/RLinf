@@ -23,7 +23,7 @@ runner:
     log_path: "../results"
     project_name: rlinf
     experiment_name: "libero_goal_ppo_openpi_pi05"
-    logger_backends: ["tensorboard"] # wandb, swanlab
+    logger_backends: ["wandb"] # wandb, swanlab
 
   max_epochs: 1000
   max_steps: -1
@@ -88,11 +88,11 @@ env:
 
   # Override the default values in env/libero_goal
   train:
-    total_num_envs: 64
+    total_num_envs: 8
     max_episode_steps: 320 # max episode steps for truncation
     max_steps_per_rollout_epoch: 320
   eval:
-    total_num_envs: 500
+    total_num_envs: 32
     auto_reset: True
     ignore_terminations: True
     max_episode_steps: 320
@@ -113,20 +113,20 @@ rollout:
   pipeline_stage_num: 1
 
   model:
-    model_path: "/path/to/model/RLinf-Pi05-SFT"
+    model_path: "./RLinf-Pi05-LIBERO-SFT"
     precision: ${actor.model.precision}
 
 actor:
   group_name: "ActorGroup"
   training_backend: "fsdp"
-  micro_batch_size: 128
-  global_batch_size: 2048 # maximum : global batch size = micro batch size * actor num_processes.
+  micro_batch_size: 64 #128
+  global_batch_size: 1024 #2048 # maximum : global batch size = micro batch size * actor num_processes.
   seed: 42
   enable_offload: False
 
   # Override the default values in model/pi0_5
   model:
-    model_path: "/path/to/model/RLinf-Pi05-SFT"
+    model_path: "./RLinf-Pi05-LIBERO-SFT"
     model_type: "openpi"
     add_value_head: True
     num_action_chunks: 5

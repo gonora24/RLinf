@@ -4,12 +4,11 @@ model_path: ""
 
 precision: null
 
-action_dim: 7
-num_action_chunks: 50
-num_images_in_input: 2
-image_size: [3, 128, 128]
-state_dim: 29
-state_latent_dim: 64
+action_dim: 32
+num_action_chunks: 1
+num_images_in_input: 1 # for noise policy and critic see dsrl
+image_size: [3, 64, 64] # see dsrl
+
 
 chunk_critic: False
 
@@ -20,7 +19,7 @@ lora_rank: 32
 
 openpi:
   config_name: "pi05_libero"
-  num_images_in_input: ${actor.model.num_images_in_input}
+  num_images_in_input: 2 # see dsrl, wrist image and agentview image from libero
   action_chunk: ${actor.model.num_action_chunks}
 
 
