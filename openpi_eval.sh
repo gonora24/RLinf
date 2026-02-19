@@ -4,6 +4,9 @@
 #SBATCH --gres=gpu:1 
 #SBATCH --job-name=openpi_eval
 
+module load devel/miniforge
+module load devel/cuda
+
 source openpi-venv/bin/activate
 
 

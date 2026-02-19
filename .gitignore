@@ -18,6 +18,8 @@ outputs/*
 .docs-venv
 uv.lock
 rlinf/envs/maniskill/assets
-.github/
+logs/*
+RLinf-Gr00t-SFT-Spatial/
 RLinf-Pi0-LIBERO-Spatial-Object-Goal-SFT/
 RLinf-Pi05-LIBERO-SFT/
+RLinf-ResNet-10-pretrained/

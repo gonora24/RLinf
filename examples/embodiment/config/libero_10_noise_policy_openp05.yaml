@@ -1,0 +1,127 @@
+defaults:
+  - env/libero_10@env.train
+  - env/libero_10@env.eval
+  - model/noise_policy_openpi@actor.model
+  - training_backend/fsdp@actor.fsdp_config
+  - override hydra/job_logging: stdout
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null
+  searchpath:
+    - file://${oc.env:EMBODIED_PATH}/config/
+
+cluster:
+  num_nodes: 1
+  component_placement:
+    actor,env,rollout: all
+
+runner:
+  task_type: embodied
+  logger:
+    log_path: "../results"
+    project_name: rlinf
+    experiment_name: "libero_10_noise_policy_openp05"
+    logger_backends: ["tensorboard"] # wandb, swanlab
+
+  max_epochs: 1000
+  max_steps: -1
+
+  only_eval: False
+  val_check_interval: -1
+  save_interval: 40
+
+  resume_dir: null # Optional: path to a saved checkpoint directory, such as 'checkpoints/global_step_10'. If not None, it will be used to resume training.
+  ckpt_path: null  # Optional: path to a .pt checkpoint. If not None, it will be loaded after the model is instantiated (for evaluation).
+
+algorithm:
+  loss_type: noise_policy_openpi
+  adv_type: noise_policy_openpi # does not matter for noise policy so just put anything here
+  group_size: 1
+  reward_coef: 1.0
+
+  replay_buffer:
+    enable_cache: True
+    cache_size: 1000
+    sample_window_size: 1000
+    min_buffer_size: 50
+
+env:
+  group_name: "EnvGroup"
+  enable_offload: False
+
+  train:
+    total_num_envs: 1
+    max_episode_steps: 480 # max episode steps for truncation
+    max_steps_per_rollout_epoch: 400
+    reward_coef: ${algorithm.reward_coef}
+    group_size: ${algorithm.group_size}
+  eval:
+    total_num_envs: 1
+    auto_reset: True
+    ignore_terminations: True
+    max_episode_steps: 480
+    max_steps_per_rollout_epoch: 400
+    group_size: 1
+    use_fixed_reset_state_ids: True
+
+rollout:
+  group_name: "RolloutGroup"
+  generation_backend: "huggingface"
+  recompute_logprobs: False
+  unnorm_key: libero_10
+  enable_offload: False
+  pipeline_stage_num: 1
+
+  model:
+    model_path: "/home/i53/student/gorhan/Masterarbeit/RLinf/RLinf-Pi05-LIBERO-SFT"
+    precision: ${actor.model.precision}
+    encoder_config:
+      model_path: "/home/i53/student/gorhan/Masterarbeit/RLinf/RLinf-ResNet10-pretrained"
+      ckpt_name: "resnet10_pretrained.pt"
+
+actor:
+  group_name: "ActorGroup"
+  training_backend: "fsdp"
+  micro_batch_size: 32      # how many samples each GPU processes per sampling step
+  global_batch_size: 5120   # after how many sampled examples we perform one loss backward pass. Requirement: global bz must be '_world_size' multiples of local bs.
+  seed: 0
+  enable_offload: False
+  # Override the default values in model/noise_policy
+  model:
+    model_path: "/home/i53/student/gorhan/Masterarbeit/RLinf/RLinf-Pi05-LIBERO-SFT"
+    model_type: "noise_policy_openpi"
+    encoder_config:
+      model_path: "/home/i53/student/gorhan/Masterarbeit/RLinf/RLinf-ResNet10-pretrained"
+      ckpt_name: "resnet10_pretrained.pt"
+
+  optim:
+    lr: 5.0e-6
+    action_q_lr: 5.0e-6
+    noise_q_lr: 5.0e-6
+    value_lr: 1.0e-4
+    adam_beta1: 0.9
+    adam_beta2: 0.95
+    adam_eps: 1.0e-08
+    clip_grad: 1.0
+    weight_decay: 0.01
+
+  # Override the default values in training_backend/fsdp
+  fsdp_config:
+    strategy: "fsdp"
+    sharding_strategy: "no_shard"
+    gradient_checkpointing: False # for openpi, gradient checkpointing is not supported, please do not change this value
+    mixed_precision:
+      param_dtype: ${actor.model.precision}
+      reduce_dtype: ${actor.model.precision}
+      buffer_dtype: ${actor.model.precision}
+
+# unnecessary but needed for correct workflow
+reward:
+  use_reward_model: False
+
+# unnecessary but needed for correct workflow
+critic:
+  use_critic_model: False
+

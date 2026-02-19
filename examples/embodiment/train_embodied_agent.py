@@ -45,6 +45,10 @@ def main(cfg) -> None:
         from rlinf.workers.actor.fsdp_sac_policy_worker import EmbodiedSACFSDPPolicy
 
         actor_worker_cls = EmbodiedSACFSDPPolicy
+    elif cfg.algorithm.loss_type == "noise_policy_openpi":
+        from rlinf.workers.actor.fsdp_noise_sac_policy_worker import EmbodiedNoiseSACFSDPPolicy
+
+        actor_worker_cls = EmbodiedNoiseSACFSDPPolicy
     else:
         from rlinf.workers.actor.fsdp_actor_worker import EmbodiedFSDPActor
 
@@ -64,18 +68,11 @@ def main(cfg) -> None:
         cluster, name=cfg.env.group_name, placement_strategy=env_placement
     )
 
-    demo_buffer = None
-    if cfg.get("data", None):
-        from rlinf.data.datasets import create_rl_dataset
-
-        demo_buffer, _ = create_rl_dataset(cfg, tokenizer=None)
-
     runner = EmbodiedRunner(
         cfg=cfg,
         actor=actor_group,
         rollout=rollout_group,
         env=env_group,
-        demo_buffer=demo_buffer,
     )
 
     runner.init_workers()
