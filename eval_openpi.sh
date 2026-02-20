@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:1 
-#SBATCH --job-name=openpi_eval
+#SBATCH --job-name=eval_openpi_goal
 
 export WANDB_API_KEY='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'
 export WANDB_EMAIL='noragorhan@gmail.com'
@@ -14,4 +14,4 @@ module load devel/cuda
 source openpi-venv/bin/activate
 
 
-bash examples/embodiment/eval_embodiment.sh libero_spatial_ppo_openpi_pi05
+bash examples/embodiment/eval_embodiment.sh libero_goal_ppo_openpi_pi05_eval

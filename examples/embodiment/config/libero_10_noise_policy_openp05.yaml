@@ -93,19 +93,20 @@ actor:
     model_path: "/home/i53/student/gorhan/Masterarbeit/RLinf/RLinf-Pi05-LIBERO-SFT"
     model_type: "noise_policy_openpi"
     encoder_config:
+      use_pretrain: False
       model_path: "/home/i53/student/gorhan/Masterarbeit/RLinf/RLinf-ResNet10-pretrained"
       ckpt_name: "resnet10_pretrained.pt"
 
   optim:
     lr: 5.0e-6
-    action_q_lr: 5.0e-6
-    noise_q_lr: 5.0e-6
-    value_lr: 1.0e-4
     adam_beta1: 0.9
     adam_beta2: 0.95
     adam_eps: 1.0e-08
     clip_grad: 1.0
     weight_decay: 0.01
+  
+  critic_optim:
+    lr: 5.0e-6
 
   # Override the default values in training_backend/fsdp
   fsdp_config:

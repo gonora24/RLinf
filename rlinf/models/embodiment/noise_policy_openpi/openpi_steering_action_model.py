@@ -20,6 +20,7 @@ from openpi.models.pi0_config import Pi0Config
 from openpi.models_pytorch.pi0_pytorch import PI0Pytorch, make_att_2d_masks
 
 from rlinf.models.embodiment.base_policy import BasePolicy, ForwardType
+from rlinf.models.embodiment.modules.encoder import Encoder
 from rlinf.models.embodiment.modules.gaussian_policy import GaussianTanhPolicy
 from rlinf.models.embodiment.modules.q_head import MultiQHead, QHead
 from rlinf.models.embodiment.modules.resnet_utils import ResNetEncoder
@@ -46,10 +47,14 @@ class NoisePolicyConfig:
     noise_critic_hidden_dims: list[int] = field(default_factory=lambda: [128, 128, 128])
     policy_hidden_dims: list[int] = field(default_factory=lambda: [128, 128, 128])
     action_dim: int = 32 # dimension of one noise action which is denoised
+    action_magnitude: float = 1.0 # magnitude of the noise action
 
     state_dim: int = 32
     state_latent_dim: int = 64
     mix_proj_hidden_dim: int = 256
+
+    cnn_features: list[int] = field(default_factory=lambda: [32, 32, 32, 32])
+    cnn_strides: list[int] = field(default_factory=lambda: [2, 1, 1, 1])
 
     # hyper-parameters
     action_chunk: int = 1  # action chunk
@@ -137,39 +142,36 @@ class NoisePolicyForOpenPI(nn.Module, BasePolicy):
         # Image encoders (one per camera view)
         self.encoders = nn.ModuleList()
         encoder_out_dim = 0
-        sample_x = torch.randn(1, *self.config.image_size)
         for img_id in range(self.config.num_images_in_input):
             self.encoders.append(
-                ResNetEncoder(
-                    sample_x, out_dim=256, encoder_cfg=self.config.encoder_config
-                )
+                Encoder(self.config.cnn_features, self.config.cnn_strides, out_features=50)
             )
-            encoder_out_dim += self.encoders[img_id].out_dim
+            encoder_out_dim += self.encoders[img_id].out_features
 
         # # State encoder
-        if self.config.backbone == "resnet":
-            self.state_proj = nn.Sequential(
-                *make_mlp(
-                    in_channels=self.config.state_dim,
-                    mlp_channels=[
-                        self.config.state_latent_dim,
-                    ],
-                    act_builder=nn.Tanh,
-                    last_act=True,
-                    use_layer_norm=True,
-                )
+
+        self.state_proj = nn.Sequential(
+            *make_mlp(
+                in_channels=self.config.state_dim,
+                mlp_channels=[
+                    self.config.state_latent_dim,
+                ],
+                act_builder=nn.Tanh,
+                last_act=True,
+                use_layer_norm=True,
             )
-            init_mlp_weights(self.state_proj, nonlinearity="tanh")
-            self.mix_proj = nn.Sequential(
-                *make_mlp(
-                    in_channels=encoder_out_dim + self.config.state_latent_dim,
-                    mlp_channels=[256, self.config.mix_proj_hidden_dim],
-                    act_builder=nn.Tanh,
-                    last_act=True,
-                    use_layer_norm=True,
-                )
+        )
+        init_mlp_weights(self.state_proj, nonlinearity="tanh")
+        self.mix_proj = nn.Sequential(
+            *make_mlp(
+                in_channels=encoder_out_dim + self.config.state_latent_dim,
+                mlp_channels=[256, self.config.mix_proj_hidden_dim],
+                act_builder=nn.Tanh,
+                last_act=True,
+                use_layer_norm=True,
             )
-            init_mlp_weights(self.mix_proj, nonlinearity="tanh")
+        )
+        init_mlp_weights(self.mix_proj, nonlinearity="tanh")
 
         # Action space critic
         # TODO: what to do for action chunking?
@@ -204,8 +206,10 @@ class NoisePolicyForOpenPI(nn.Module, BasePolicy):
         # Noise policy head
         self.noise_policy = GaussianTanhPolicy(
             obs_dim=encoder_out_dim + self.config.state_latent_dim, #lower dimensional for noise policy (design?)
-            action_dim=self.config.action_dim,
+            action_dim=32, # noise action dim is always 32
             hidden_dims=self.config.policy_hidden_dims,
+            low=-self.config.action_magnitude,
+            high=self.config.action_magnitude,
         )
 
 
@@ -344,7 +348,12 @@ class NoisePolicyForOpenPI(nn.Module, BasePolicy):
         return next_actions, next_log_probs, shared_feature
     
     def sac_q_forward(self, curr_obs, actions, shared_feature=None, detach_encoder=False, **kwargs):
-        """SAC Q-value forward pass using Noise Critic"""
+        """SAC Q-value forward pass using Noise Critic
+        curr_obs: current observation
+        actions: noise actions
+        shared_feature: shared feature from encoders
+        detach_encoder: whether to detach the encoder
+        """
         if shared_feature is None:
             shared_feature, _ = self.get_feature(curr_obs)
         if detach_encoder:
@@ -525,7 +534,7 @@ class NoisePolicyForOpenPI(nn.Module, BasePolicy):
         # compute policy-predicted noise chunk (flattened)
         full_feature, _ = self.get_feature(observation)
         noise_action = self.noise_policy(full_feature)
-        noise_chunk = noise_action.repeat(bsize, self.config.action_chunk, 1) # stimmt das?
+        noise_chunk = noise_action.repeat(bsize, 50, 1) # stimmt das? noise input dim ist immer 50
         actions, log_probs = self.openpi.sample_actions(device=observation.device, observation=observation, noise=noise_chunk)
 
         # Compute values for RL 

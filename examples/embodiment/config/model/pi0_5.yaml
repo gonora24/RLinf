@@ -5,9 +5,9 @@ model_path: "/path/to/model/openpi"
 
 precision: null # for openpi, precision is null, please do not change this value
 
-# Action and chunk settings
-num_action_chunks: 10
-action_dim: 7
+# Action and chunk settings (openpi.action_chunk mirrors num_action_chunks)
+num_action_chunks: 10 # action chunks used by env; action_horizon is set by dataconfig (e.g. pi05_libero)
+action_dim: 7 # dimension of one predicted action
 
 # LoRA settings
 is_lora: False
@@ -18,7 +18,7 @@ use_proprio: True
 num_steps: 5
 add_value_head: False
 
-# openpi specific parameters
+# openpi specific parameters, directly passed to openpi_action_model.py
 openpi:
   config_name: "pi05_libero"
   num_images_in_input: 2

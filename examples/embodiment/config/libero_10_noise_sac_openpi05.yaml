@@ -37,6 +37,10 @@ runner:
 
 algorithm:
   loss_type: noise_sac
+  tau: 0.005 # soft update coefficient for target networks
+  gamma: 0.999 # discount factor for future rewards
+  entropy_tuning:
+    target_entropy: -16 # target entropy for entropy tuning -d/2 -> 32/2 = 16
 
   replay_buffer:
     enable_cache: True
@@ -79,6 +83,7 @@ rollout:
     model_path: "/home/i53/student/gorhan/Masterarbeit/RLinf/RLinf-Pi05-LIBERO-SFT"
     precision: ${actor.model.precision}
     encoder_config:
+      use_pretrain: False
       model_path: "/home/i53/student/gorhan/Masterarbeit/RLinf/RLinf-ResNet10-pretrained"
       ckpt_name: "resnet10_pretrained.pt"
     openpi:
@@ -88,7 +93,7 @@ rollout:
 actor:
   group_name: "ActorGroup"
   training_backend: "fsdp"
-  micro_batch_size: 128
+  micro_batch_size: 256
   global_batch_size: 2048 # maximum : global batch size = micro batch size * actor num_processes.
   seed: 42
   enable_offload: False
@@ -98,6 +103,7 @@ actor:
     model_path: "/home/i53/student/gorhan/Masterarbeit/RLinf/RLinf-Pi05-LIBERO-SFT"
     model_type: "noise_sac"
     encoder_config:
+      use_pretrain: False
       model_path: "/home/i53/student/gorhan/Masterarbeit/RLinf/RLinf-ResNet10-pretrained"
       ckpt_name: "resnet10_pretrained.pt"
     num_steps: 10
@@ -105,13 +111,15 @@ actor:
     use_dsrl_sac: True
 
   optim:
-    lr: 5.0e-6
-    value_lr: 1.0e-4
+    lr: 1.0e-4
     adam_beta1: 0.9
     adam_beta2: 0.95
     adam_eps: 1.0e-08
     clip_grad: 1.0
     weight_decay: 0.01
+
+  critic_optim:
+    lr: 3.0e-4
 
   # Override the default values in training_backend/fsdp
   fsdp_config:

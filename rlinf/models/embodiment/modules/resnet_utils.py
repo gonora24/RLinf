@@ -104,7 +104,7 @@ class ResNetEncoder(nn.Module):
 
         self.num_spatial_blocks = 8
         self.pooling_method = "spatial_learned_embeddings"
-        self.use_pretrain = True
+        self.use_pretrain = self.encoder_cfg.get("use_pretrain", True)
 
         self.resnet_backbone = ResNet10(pre_pooling=self.use_pretrain)
         if self.use_pretrain:

@@ -48,7 +48,7 @@ class OpenPi0Config(Pi0Config):
         default_factory=lambda: [0.08, 0.16]
     )  # [min_std, max_std]
     # hyper-parameters
-    action_chunk: int = 5  # action chunk
+    action_chunk: int = 5  # action horizon for env to replan
     action_env_dim: int = 7  # for environment action dim
     num_steps: int = 10  # denoise steps
     # training config

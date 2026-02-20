@@ -4,11 +4,13 @@ model_path: ""
 
 precision: null
 
-action_dim: 32
+action_dim: 7
+action_magnitude: 1.0 # magnitude of the noise action
 num_action_chunks: 1
 num_images_in_input: 1 # for noise policy and critic see dsrl
 image_size: [3, 64, 64] # see dsrl
-
+cnn_features: [32, 32, 32, 32]
+cnn_strides: [2, 1, 1, 1]
 
 chunk_critic: False
 
@@ -18,11 +20,12 @@ lora_rank: 32
 
 
 openpi:
-  config_name: "pi05_libero"
+  config_name: "pi05_libero_dsrl" # action horizon is manually set to 50 in the config (like it usually is)
   num_images_in_input: 2 # see dsrl, wrist image and agentview image from libero
   action_chunk: ${actor.model.num_action_chunks}
 
 
 encoder_config:
+  use_pretrain: False
   model_path: "/path/to/model/resnet"
   ckpt_name: "resnet10_pretrained.pt"

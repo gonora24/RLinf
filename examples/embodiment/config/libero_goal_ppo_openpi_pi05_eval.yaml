@@ -22,18 +22,18 @@ runner:
   logger:
     log_path: "../results"
     project_name: rlinf
-    experiment_name: "libero_goal_ppo_openpi_pi05_batch128"
+    experiment_name: "libero_goal_ppo_openpi_pi05_eval_ckpt_0"
     logger_backends: ["wandb"] # wandb, swanlab
 
   max_epochs: 1000
   max_steps: -1
 
-  only_eval: False
+  only_eval: True
   val_check_interval: -1
   save_interval: 40
 
   resume_dir: null # Optional: path to a saved checkpoint directory, such as 'checkpoints/global_step_10'. If not None, it will be used to resume training.
-  ckpt_path: null  # Optional: path to a .pt checkpoint. If not None, it will be loaded after the model is instantiated (for evaluation).
+  ckpt_path: "logs/20260220-05:03:48-libero_goal_ppo_openpi_pi05/libero_goal_ppo_openpi_pi05/checkpoints/global_step_40/actor/model_state_dict/full_weights.pt"  # Optional: path to a .pt checkpoint. If not None, it will be loaded after the model is instantiated (for evaluation).
 
 algorithm:
   normalize_advantages: True
@@ -41,7 +41,7 @@ algorithm:
   group_size: 1
   reward_coef: 1.0
   rollout_epoch: 8
-  eval_rollout_epoch: 1 # set eval_rollout_epoch > 0 when enable runner.only_eval or runner.val_check_interval > 0
+  eval_rollout_epoch: 10 # set eval_rollout_epoch > 0 when enable runner.only_eval or runner.val_check_interval > 0
 
   reward_type: chunk_level
   logprob_type: chunk_level
@@ -119,7 +119,7 @@ rollout:
 actor:
   group_name: "ActorGroup"
   training_backend: "fsdp"
-  micro_batch_size: 128 #64 #128
+  micro_batch_size: 64 #64 #128
   global_batch_size: 1024 #2048 # maximum : global batch size = micro batch size * actor num_processes.
   seed: 42
   enable_offload: False

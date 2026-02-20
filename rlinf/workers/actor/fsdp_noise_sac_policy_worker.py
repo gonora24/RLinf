@@ -57,7 +57,7 @@ class EmbodiedNoiseSACFSDPPolicy(EmbodiedFSDPActor):
     def init_worker(self):
         self.setup_model_and_optimizer(initialize_target=True)
         self.setup_sac_components()
-        self.soft_update_target_model(tau=1.0)
+        self.soft_update_target_model(tau=self.cfg.algorithm.tau)
         if self.cfg.actor.get("enable_offload", False):
             self.offload_param_and_grad()
             self.offload_optimizer()
@@ -95,7 +95,7 @@ class EmbodiedNoiseSACFSDPPolicy(EmbodiedFSDPActor):
             self.target_model.requires_grad_(False)
             self.target_model_initialized = True
 
-        param_filters = {"critic": ["encoders", "encoder", "q_head", "state_proj"]}
+        param_filters = {"critic": ["encoders", "encoder", "q_head", "state_proj"]} # TODO: adjust
         filtered_optim_config = {"critic": self.cfg.actor.critic_optim}
         optimizers = self.build_optimizers(
             model=self.model,
