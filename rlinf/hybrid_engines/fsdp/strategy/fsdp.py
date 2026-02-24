@@ -77,6 +77,8 @@ class FSDPStrategy(FSDPStrategyBase):
             self.cfg.fsdp_config.backward_prefetch
         )
 
+        ignored_modules = getattr(model, "_ignored_modules", None)
+
         fsdp_model = FSDP(
             module=model,
             param_init_fn=init_fn,
@@ -90,6 +92,7 @@ class FSDPStrategy(FSDPStrategyBase):
             backward_prefetch=backward_prefetch,
             limit_all_gathers=self.cfg.fsdp_config.limit_all_gathers,
             use_orig_params=self.cfg.fsdp_config.use_orig_params,
+            ignored_modules=ignored_modules,
         )
         return fsdp_model
 
