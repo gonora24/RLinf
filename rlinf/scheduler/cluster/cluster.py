@@ -59,6 +59,9 @@ class ClusterEnvVar(str, Enum):
     COMM_NET_DEVICES = "COMM_NET_DEVICES"
     """Network devices to use for inter-node communication."""
 
+    RAY_ADDRESS = "RAY_ADDRESS"
+    """Address of the Ray cluster. Used for ray debugging."""
+
     EXT_MODULE = "EXT_MODULE"
     """Load extension modules specified via EXT_MODULE environment variable.
 
@@ -89,6 +92,7 @@ class Cluster:
         ClusterEnvVar.NODE_RANK: None,
         ClusterEnvVar.COMM_NET_DEVICES: None,
         ClusterEnvVar.EXT_MODULE: None,
+        ClusterEnvVar.RAY_ADDRESS: None,
     }
 
     class NamespaceConflictError(Exception):
@@ -207,7 +211,7 @@ class Cluster:
         try:
             # First try to connect to an existing Ray cluster
             ray.init(
-                address="auto",
+                address=Cluster.get_sys_env_var(ClusterEnvVar.RAY_ADDRESS) or "auto",
                 logging_level=Cluster.LOGGING_LEVEL,
                 namespace=Cluster.NAMESPACE,
             )
@@ -312,7 +316,7 @@ class Cluster:
     def _init_from_existing_managers(self):
         if not ray.is_initialized():
             ray.init(
-                address="auto",
+                address=Cluster.get_sys_env_var(ClusterEnvVar.RAY_ADDRESS) or "auto",
                 namespace=Cluster.NAMESPACE,
                 logging_level=Cluster.LOGGING_LEVEL,
             )
