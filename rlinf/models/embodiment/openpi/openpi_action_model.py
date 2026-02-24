@@ -147,7 +147,7 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
         if self.config.noise_method == "flow_noise":
             self.noise_head = ExploreNoiseNet(
                 in_dim=1024,
-                out_dim=self.config.action_dim,
+                out_dim=self.config.action_dim, #kommt aus Pi0Config
                 hidden_dims=[128, 64],
                 activation_type="tanh",
                 noise_logvar_range=self.config.noise_logvar_range,

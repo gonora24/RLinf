@@ -78,7 +78,7 @@ class NoisePolicyConfig:
         for key, value in config_dict.items():
             if hasattr(self, key):
                 self.__setattr__(key, value)
-        self._update_info()
+        # self._update_info()
 
     def _update_info(self):
         assert self.encoder_config['model_path'] is not None, "Please specify the encoder model_path."
@@ -138,6 +138,7 @@ class NoisePolicyForOpenPI(nn.Module, BasePolicy):
         for p in self.openpi.parameters():
             p.requires_grad = False
         self.openpi.eval()
+        self._ignored_modules = [self.openpi] 
         #TODO: was ist hier der Input fuer den critic, welche encoder werden gebraucht
         # Image encoders (one per camera view)
         self.encoders = nn.ModuleList()
@@ -183,7 +184,6 @@ class NoisePolicyForOpenPI(nn.Module, BasePolicy):
             noise_dim = self.config.action_dim
 
         if self.config.use_dsrl_sac:
-            # TODO: we need ensemble and no double Q-learning
             self.noise_critic = MultiQHead(hidden_size=encoder_out_dim + self.config.state_latent_dim, 
                                               action_feature_dim=self.config.action_dim, 
                                               hidden_dims=self.config.noise_critic_hidden_dims, 
@@ -206,7 +206,7 @@ class NoisePolicyForOpenPI(nn.Module, BasePolicy):
         # Noise policy head
         self.noise_policy = GaussianTanhPolicy(
             obs_dim=encoder_out_dim + self.config.state_latent_dim, #lower dimensional for noise policy (design?)
-            action_dim=32, # noise action dim is always 32
+            action_dim=self.config.action_dim, # noise action dim is always 32
             hidden_dims=self.config.policy_hidden_dims,
             low=-self.config.action_magnitude,
             high=self.config.action_magnitude,

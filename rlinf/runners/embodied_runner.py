@@ -35,6 +35,7 @@ if TYPE_CHECKING:
     from rlinf.workers.actor.fsdp_actor_worker import EmbodiedFSDPActor
     from rlinf.workers.actor.fsdp_sac_policy_worker import EmbodiedSACFSDPPolicy
     from rlinf.workers.env.async_env_worker import AsyncEnvWorker
+    from rlinf.workers.actor.fsdp_noise_sac_policy_worker import EmbodiedNoiseSACFSDPPolicy
     from rlinf.workers.env.env_worker import EnvWorker
     from rlinf.workers.rollout.hf.async_huggingface_worker import (
         AsyncMultiStepRolloutWorker,
@@ -47,7 +48,7 @@ class EmbodiedRunner:
         self,
         cfg: DictConfig,
         actor: Union[
-            "EmbodiedFSDPActor", "EmbodiedSACFSDPPolicy", "AsyncEmbodiedSACFSDPPolicy"
+            "EmbodiedFSDPActor", "EmbodiedSACFSDPPolicy", "AsyncEmbodiedSACFSDPPolicy", "EmbodiedNoiseSACFSDPPolicy",
         ],
         rollout: Union["MultiStepRolloutWorker", "AsyncMultiStepRolloutWorker"],
         env: Union["EnvWorker", "AsyncEnvWorker"],

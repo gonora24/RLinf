@@ -32,7 +32,7 @@ class Encoder(nn.Module):
             in_channels = feat
         self.main = nn.Sequential(*layers)
         self.mlp = nn.Sequential(
-            nn.Linear(self.features[-1], out_channels=self.out_features), # hardcoded from dsrl
+            nn.Linear(self.features[-1], self.out_features), # hardcoded from dsrl
             nn.LayerNorm(self.out_features),
             nn.Tanh()
         )

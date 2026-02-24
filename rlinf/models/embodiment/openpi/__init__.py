@@ -33,6 +33,7 @@ def get_model(cfg: DictConfig, torch_dtype=None):
     )
 
     # config
+    breakpoint()
     config_name = getattr(cfg.openpi, "config_name", None)
     actor_train_config = get_openpi_config(config_name, model_path=cfg.model_path)
     actor_model_config = actor_train_config.model
@@ -47,6 +48,7 @@ def get_model(cfg: DictConfig, torch_dtype=None):
     if not weight_paths:
         weight_paths = [os.path.join(checkpoint_dir, "model.safetensors")]
 
+    breakpoint()
     model: OpenPi0ForRLActionPrediction = OpenPi0ForRLActionPrediction(
         actor_model_config
     )
