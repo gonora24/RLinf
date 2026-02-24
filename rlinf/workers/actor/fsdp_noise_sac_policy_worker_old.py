@@ -242,7 +242,6 @@ class EmbodiedNoiseSACFSDPPolicy(EmbodiedFSDPActor):
     def setup_sac_components(self):
         """Initialize SAC-specific components"""
         # Initialize replay buffer
-        breakpoint()
         seed = self.cfg.actor.get("seed", 1234)
         auto_save_path = self.cfg.algorithm.replay_buffer.get("auto_save_path", None)
         if auto_save_path is None:
