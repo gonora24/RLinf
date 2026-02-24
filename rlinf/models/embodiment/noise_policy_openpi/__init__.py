@@ -76,6 +76,9 @@ def get_model(cfg: DictConfig, torch_dtype=torch.bfloat16):
     model_config.update_from_dict(cfg_dict)
     
     noise_model = NoisePolicyForOpenPI(model_config, openpi_model)
+    # Ensure uniform dtype for FSDP: OpenPI is bfloat16; convert trainable
+    # modules (encoders, Q-heads, Gaussian policy) to match.
+    noise_model.to(torch.bfloat16)
     noise_model.setup_wrappers(
         transforms=[
             *repack_transforms.inputs,
