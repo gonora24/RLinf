@@ -299,6 +299,20 @@ class NoisePolicyForOpenPI(nn.Module, BasePolicy):
         states = env_obs["states"]
         curr_img = np.array(cv2.resize(agentview_image, (self.config.image_size[1], self.config.image_size[2]), interpolation=cv2.INTER_AREA)) 
         return {"main_images": curr_img, "states": states}
+
+    def preprocess_images(self, images):
+        import torch.nn.functional as F
+
+        resized_images = []
+        for img in images:  # img.shape: [3, 3, 224, 224] (B, C, H, W)
+
+            # Resize spatial dims from 224x224 to 64x64
+            img_resized = F.interpolate(img, size=(64, 64),
+                                        mode="bilinear", align_corners=False)
+            # img_resized.shape: [3, 3, 64, 64] (B, C, H, W)
+
+            resized_images.append(img_resized)
+        return resized_images
     
     def get_feature(self, obs):
         """Extract features from observations (images + states)"""
@@ -409,7 +423,7 @@ class NoisePolicyForOpenPI(nn.Module, BasePolicy):
             "prompt": env_obs["task_descriptions"],
         }
         # state observation
-        if "calvin" in self.config.openpi.config_name:
+        if "calvin" in self.config.openpi["config_name"]:
             state = env_obs["states"]
             processed_obs["observation/state_ee_pos"] = state[:, :3]
             processed_obs["observation/state_ee_rot"] = state[:, 3:6]
@@ -421,6 +435,47 @@ class NoisePolicyForOpenPI(nn.Module, BasePolicy):
             processed_obs["observation/wrist_image"] = env_obs["wrist_images"]
         # store used keys
         return processed_obs
+
+    # def precision_processor(self, processed_obs):
+    #     """Precision processor for processed observations. Converts images and states to model dtype, ensuring correct format."""
+    #     device = next(self.parameters()).device
+    #     dtype = next(self.parameters()).dtype
+
+    #     # Keys that should have their dtype converted (images and states)
+    #     convert_dtype_keys = {"image", "state"}
+
+    #     for key, value in processed_obs.items():
+    #         if isinstance(value, list):
+    #             processed_obs[key] = [
+    #                 item.to(device=device, dtype=dtype).contiguous()
+    #                 if torch.is_tensor(item) and key in convert_dtype_keys
+    #                 else item.to(device=device).contiguous()
+    #                 if torch.is_tensor(item)
+    #                 else item
+    #                 for item in value
+    #             ]
+    #         elif torch.is_tensor(value):
+    #             if key in convert_dtype_keys:
+    #                 # For images, ensure they are in [B, C, H, W] format expected by OpenPI
+    #                 if key == "image" and len(value.shape) == 4 and value.shape[-1] == 3:
+    #                     # Convert from [B, H, W, C] to [B, C, H, W] if needed
+    #                     value = value.permute(0, 3, 1, 2)
+    #                 processed_obs[key] = value.to(device=device, dtype=dtype).contiguous()
+    #             else:
+    #                 processed_obs[key] = value.to(device=device).contiguous()
+    #         elif isinstance(value, dict):
+    #             for sub_key, sub_value in value.items():
+    #                 if torch.is_tensor(sub_value):
+    #                     if key in convert_dtype_keys or sub_key in convert_dtype_keys:
+    #                         # For images, ensure they are in [B, C, H, W] format expected by OpenPI
+    #                         if (key == "image" or sub_key == "image") and len(sub_value.shape) == 4 and sub_value.shape[-1] == 3:
+    #                             sub_value = sub_value.permute(0, 3, 1, 2)
+    #                         processed_obs[key][sub_key] = sub_value.to(
+    #                             device=device, dtype=dtype
+    #                         ).contiguous()
+    #                     else:
+    #                         processed_obs[key][sub_key] = sub_value.to(device=device).contiguous()
+    #     return processed_obs
 
     def precision_processor(self, processed_obs):
         device = next(self.parameters()).device
@@ -447,14 +502,15 @@ class NoisePolicyForOpenPI(nn.Module, BasePolicy):
         mode: Literal["train", "eval"] = "train",
         compute_values=True,
         return_obs=True,
+        **kwargs,
     ) -> tuple[np.ndarray, dict[str, Any]]:
         to_process_obs = self.obs_processor(env_obs)  # env obs -> policy input obs
         processed_obs = self.input_transform(
             to_process_obs, transpose=False
-        )  # policy input obs -> model input obs
+        )  # policy input obs -> model input obs (resize images to 224x224)
         processed_obs = self.precision_processor(
             processed_obs
-        )  # obs precision processor
+        )  # obs precision processor (especially for noise policy and critic, openpi handles it automatically)
         observation = _model.Observation.from_dict(processed_obs)
         outputs = self.sample_actions(
             observation, mode=mode, compute_values=compute_values
@@ -500,34 +556,17 @@ class NoisePolicyForOpenPI(nn.Module, BasePolicy):
         #     actions_shape = (bsize, self.config.action_horizon, self.config.action_dim)
         #     noise = self.sample_noise(actions_shape, device)
 
-        # images, img_masks, lang_tokens, lang_masks, state = (
-        #     self._preprocess_observation(observation, train=False)
-        # )
+        images, img_masks, lang_tokens, lang_masks, state = (
+            self.openpi._preprocess_observation(observation, train=False)
+        ) # extract images from obs
 
-        # prefix_embs, prefix_pad_masks, prefix_att_masks = self.embed_prefix(
-        #     images, img_masks, lang_tokens, lang_masks
-        # )
-        # prefix_att_2d_masks = make_att_2d_masks(prefix_pad_masks, prefix_att_masks)
-        # prefix_position_ids = torch.cumsum(prefix_pad_masks, dim=1) - 1
-
-        # # Compute image and language key value cache
-        # prefix_att_2d_masks_4d = self._prepare_attention_masks_4d(prefix_att_2d_masks)
-        # self.paligemma_with_expert.paligemma.language_model.config._attn_implementation = "eager"  # noqa: SLF001
-
-        # (prefix_output, _), past_key_values = self.paligemma_with_expert.forward(
-        #     attention_mask=prefix_att_2d_masks_4d,
-        #     position_ids=prefix_position_ids,
-        #     past_key_values=None,
-        #     inputs_embeds=[prefix_embs, None],
-        #     use_cache=True,
-        # )
+        resized_images = self.preprocess_images(images) # resize for noise policy
 
         # compute policy-predicted noise chunk (flattened)
-        noise_action = self.noise_policy(observation["main_images"], observation["states"])
-        noise_chunk = noise_action.repeat(bsize, 50, 1) # stimmt das? noise input dim ist immer 50
-        actions, log_probs = self.openpi.sample_actions(device=observation.device, observation=observation, noise=noise_chunk)
-
-        # Compute values for RL 
+        noise_action, _, _ = self.noise_policy(resized_images, state)  # [bsize, action_dim]
+        noise_chunk = noise_action.unsqueeze(1).repeat(1, 50, 1)  # [bsize, 50, action_dim]
+        actions, log_probs = self.openpi.sample_actions(device=device, observation=observation, noise=noise_chunk)
+        # Compute values for RL in action space
         # qs_action = self.action_critic(full_feature, actions)  
         qs_action = torch.zeros((bsize), device=device)
 

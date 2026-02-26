@@ -95,7 +95,7 @@ class EmbodiedNoiseSACFSDPPolicy(EmbodiedFSDPActor):
             self.target_model.requires_grad_(False)
             self.target_model_initialized = True
 
-        param_filters = {"critic": ["encoders", "encoder", "q_head", "state_proj"]} # TODO: adjust
+        param_filters = {"critic": ["noise_critic"]} # TODO: adjust
         filtered_optim_config = {"critic": self.cfg.actor.critic_optim}
         optimizers = self.build_optimizers(
             model=self.model,
@@ -271,7 +271,7 @@ class EmbodiedNoiseSACFSDPPolicy(EmbodiedFSDPActor):
                 kwargs["temperature"] = (
                     self.cfg.algorithm.sampling_params.temperature_train
                 )
-            next_state_actions, next_state_log_pi, shared_feature = self.model(
+            next_state_actions, next_state_log_pi = self.model(
                 forward_type=ForwardType.SAC, obs=next_obs, **kwargs
             )
             next_state_log_pi = next_state_log_pi.sum(dim=-1, keepdim=True)
@@ -280,7 +280,6 @@ class EmbodiedNoiseSACFSDPPolicy(EmbodiedFSDPActor):
                     forward_type=ForwardType.SAC_Q,
                     obs=next_obs,
                     actions=next_state_actions,
-                    shared_feature=None,
                 )
                 if self.critic_subsample_size > 0:
                     sample_idx = torch.randint(
