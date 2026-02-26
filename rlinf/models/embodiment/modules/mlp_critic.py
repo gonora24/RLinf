@@ -50,9 +50,10 @@ class MLPCritic(nn.Module):
                                               num_q_heads=num_q_heads)
 
     def forward(self, images, states, actions):
+        states = states.to(torch.float32)
         visual_features = []
         for img_id in range(self.num_images_in_input):
-            visual_features.append(self.encoders[img_id](images[:, img_id])) # [B, H, W, D]
+            visual_features.append(self.encoders[img_id](images[img_id])) # [B, H, W, D]
         visual_features = torch.cat(visual_features, dim=1) # [B, D]
         state_features = self.state_proj(states) # [B, D]
         features = torch.cat([visual_features, state_features], dim=1) # [B, D]
