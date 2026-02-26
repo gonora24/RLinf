@@ -23,13 +23,12 @@ def get_model(cfg: DictConfig, torch_dtype=torch.bfloat16):
     Returns:
         The openpi_model.
     """
-
     # Load OpenPI config from registry (like regular OpenPI does)
     config_name = getattr(cfg.openpi, "config_name", None)
     actor_train_config = get_openpi_config(config_name, model_path=cfg.model_path)
     actor_model_config = actor_train_config.model
-    # openpi_config = OpenPi0Config(**actor_model_config.__dict__)
-    openpi_config = Pi0Config(**actor_model_config.__dict__)
+    openpi_config = OpenPi0Config(**actor_model_config.__dict__)
+    # openpi_config = Pi0Config(**actor_model_config.__dict__)
     
     # Override OpenPI config with user values from cfg.openpi
     override_config_kwargs = cfg.openpi
@@ -72,13 +71,13 @@ def get_model(cfg: DictConfig, torch_dtype=torch.bfloat16):
     
     # Update the rest of NoisePolicyConfig from main cfg (excluding cfg.openpi)
     cfg_dict = OmegaConf.to_container(cfg, resolve=True)
-    cfg_dict.pop("openpi", None)  # Remove openpi section since we already handled it
+    # cfg_dict.pop("openpi", None)  # Remove openpi section since we already handled it
     model_config.update_from_dict(cfg_dict)
     
     noise_model = NoisePolicyForOpenPI(model_config, openpi_model)
     # Ensure uniform dtype for FSDP: OpenPI is bfloat16; convert trainable
     # modules (encoders, Q-heads, Gaussian policy) to match.
-    noise_model.to(torch.bfloat16)
+    # noise_model.to(torch.bfloat16)
     noise_model.setup_wrappers(
         transforms=[
             *repack_transforms.inputs,
