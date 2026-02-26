@@ -2,9 +2,9 @@ model_type: "noise_policy_openpi"
 
 model_path: ""
 
-precision: null
+precision: null # should be null for openpi
 
-action_dim: 7
+action_dim: 32
 action_magnitude: 1.0 # magnitude of the noise action
 num_action_chunks: 1
 num_images_in_input: 1 # for noise policy and critic see dsrl
@@ -25,7 +25,7 @@ openpi:
   action_chunk: ${actor.model.num_action_chunks}
 
 
-encoder_config:
-  use_pretrain: False
-  model_path: "/path/to/model/resnet"
-  ckpt_name: "resnet10_pretrained.pt"
+# encoder_config:
+#   use_pretrain: False
+#   model_path: "/path/to/model/resnet"
+#   ckpt_name: "resnet10_pretrained.pt"
