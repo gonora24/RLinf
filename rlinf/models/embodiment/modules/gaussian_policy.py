@@ -24,6 +24,7 @@ class GaussianTanhPolicy(nn.Module):
     ):
         super().__init__()
         self.encoders = nn.ModuleList()
+        self.num_images_in_input = num_images_in_input
         encoder_out_dim = 0
         for img_id in range(num_images_in_input):
             self.encoders.append(
@@ -77,10 +78,10 @@ class GaussianTanhPolicy(nn.Module):
         self.register_buffer("action_scale", (high - low) / 2.0)
         self.register_buffer("action_bias", (high + low) / 2.0)
 
-    def forward(self, images: torch.Tensor, states: torch.Tensor, deterministic: bool = False):
+    def forward(self, images, states: torch.Tensor, deterministic: bool = False):
         """
         Args:
-            images: [B, H, W, C]
+            images: list of [B, C, H, W] tensors (num_images_in_input tensors)
             states: [B, state_dim]
             deterministic: if True, use mean action; else sample with rsample().
 
@@ -89,9 +90,10 @@ class GaussianTanhPolicy(nn.Module):
             log_prob: [B, 1], log π(a|s) under this tanh-squashed Gaussian
             mean:     [B, action_dim], pre-tanh mean for diagnostics/eval
         """
+        states = states.to(torch.float32)
         visual_features = []
         for img_id in range(self.num_images_in_input):
-            visual_features.append(self.encoders[img_id](images[:, img_id])) # [B, H, W, D]
+            visual_features.append(self.encoders[img_id](images[img_id])) # [B, C, H, W]
         visual_features = torch.cat(visual_features, dim=1) # [B, D]
         state_features = self.state_proj(states) # [B, D]
         features = torch.cat([visual_features, state_features], dim=1) # [B, D]

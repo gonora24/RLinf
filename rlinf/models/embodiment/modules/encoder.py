@@ -39,9 +39,9 @@ class Encoder(nn.Module):
         init_mlp_weights(self.mlp, nonlinearity="tanh")
 
         
-    def forward(self, observations: torch.Tensor) -> torch.Tensor:
-
-        x = self.main(x)
-
-        x = self.mlp(x)
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.main(x)  # [B, features[-1], H, W]
+        # Global average pooling over spatial dimensions
+        x = torch.mean(x, dim=[2, 3])  # [B, features[-1]]
+        x = self.mlp(x)  # [B, out_features]
         return x
