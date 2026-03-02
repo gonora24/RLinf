@@ -20,12 +20,12 @@ cluster:
 runner:
   task_type: embodied
   logger:
-    log_path: "../results"
+    log_path: "/pfs/work9/workspace/scratch/ka_eu3660-rlinf_tmp"
     project_name: rlinf
     experiment_name: "libero_10_ppo_openpi_pi05"
-    logger_backends: ["tensorboard"] # wandb, swanlab
+    logger_backends: ["wandb"] # wandb, swanlab
 
-  max_epochs: 1000
+  max_epochs: 500
   max_steps: -1
 
   only_eval: False

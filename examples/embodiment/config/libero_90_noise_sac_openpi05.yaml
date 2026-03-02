@@ -22,8 +22,8 @@ runner:
   logger:
     log_path: "../results"
     project_name: rlinf
-    experiment_name: "libero_10_noise_sac_openpi05"
-    logger_backends: ["tensorboard"] # wandb, swanlab
+    experiment_name: "libero_90_noise_sac_openpi05"
+    logger_backends: ["wandb"] # wandb, swanlab
 
   max_epochs: 1000
   max_steps: -1
@@ -75,21 +75,21 @@ algorithm:
     enable_cache: True
     cache_size: 200 # changed due to memory error
     sample_window_size: 200
-    min_buffer_size: 1 #50 changed for debugging
+    min_buffer_size: 50 #1 changed for debugging
 
 env:
   group_name: "EnvGroup"
   enable_offload: False
 
   train:
-    total_num_envs: 1
+    total_num_envs: 16
     max_episode_steps: 480 # max episode steps for truncation
     max_steps_per_rollout_epoch: 480
     specific_reset_id: 58
     reward_coef: ${algorithm.reward_coef}
     group_size: ${algorithm.group_size}
   eval:
-    total_num_envs: 4
+    total_num_envs: 64
     auto_reset: True
     ignore_terminations: True
     max_episode_steps: 480
