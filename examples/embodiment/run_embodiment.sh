@@ -4,6 +4,7 @@
 export REPO_PATH="/home/ka/ka_anthropomatik/ka_eu3660/projects/RLinf"
 export EMBODIED_PATH="${REPO_PATH}/examples/embodiment"
 export SRC_FILE="${EMBODIED_PATH}/train_embodied_agent.py"
+export ABS_LOG_DIR="/pfs/work9/workspace/scratch/ka_eu3660-rlinf_tmp"
 
 # Activate venv with absolute path
 source "${REPO_PATH}/openpi-venv/bin/activate"
@@ -38,12 +39,14 @@ ROBOT_PLATFORM=${2:-${ROBOT_PLATFORM:-"LIBERO"}}
 export ROBOT_PLATFORM
 echo "Using ROBOT_PLATFORM=$ROBOT_PLATFORM"
 
-# enable ray debug
-export RAY_DEBUG=1
-# export RAY_DEBUG_POST_MORTEM=1
+if [ "$DEBUG" == 0 ]; then
+    export RAY_DEBUG=0
+else
+    export RAY_DEBUG=1
+fi
 
 echo "Using Python at $(which python)"
-LOG_DIR="${REPO_PATH}/logs/$(date +'%Y%m%d-%H:%M:%S')-${CONFIG_NAME}" #/$(date +'%Y%m%d-%H:%M:%S')"
+LOG_DIR="${ABS_LOG_DIR}/logs/$(date +'%Y%m%d-%H:%M:%S')-${CONFIG_NAME}" #/$(date +'%Y%m%d-%H:%M:%S')"
 MEGA_LOG_FILE="${LOG_DIR}/run_embodiment.log"
 mkdir -p "${LOG_DIR}"
 CMD="python ${SRC_FILE} --config-path ${EMBODIED_PATH}/config/ --config-name ${CONFIG_NAME} runner.logger.log_path=${LOG_DIR}"
