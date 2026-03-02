@@ -422,7 +422,7 @@ class EmbodiedNoiseSACFSDPPolicy(EmbodiedFSDPActor):
                 kwargs["temperature"] = (
                     self.cfg.algorithm.sampling_params.temperature_train
                 )
-            _, log_pi, _ = self.model(
+            _, log_pi = self.model(
                 forward_type=ForwardType.SAC, obs=curr_obs, **kwargs
             )
             log_pi = log_pi.sum(dim=-1, keepdim=True)
@@ -596,7 +596,6 @@ class EmbodiedNoiseSACFSDPPolicy(EmbodiedFSDPActor):
     @Worker.timer("run_training")
     def run_training(self):
         """SAC training using replay buffer"""
-        breakpoint()
         if self.cfg.actor.get("enable_offload", False):
             self.load_param_and_grad(self.device)
             self.load_optimizer(self.device)

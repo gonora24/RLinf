@@ -129,40 +129,6 @@ class NoisePolicyForOpenPI(nn.Module, BasePolicy):
         self.openpi.eval()
         self._ignored_modules = [self.openpi]
 
-        # Image encoders (one per camera view)
-        # self.encoders = nn.ModuleList()
-        # encoder_out_dim = 0
-        # for img_id in range(self.config.num_images_in_input):
-        #     self.encoders.append(
-        #         Encoder(self.config.cnn_features, self.config.cnn_strides, out_features=50) # from dsrl
-        #     )
-        #     encoder_out_dim += self.encoders[img_id].out_features
-
-        # # # State encoder
-
-        # self.state_proj = nn.Sequential(
-        #     *make_mlp(
-        #         in_channels=self.config.state_dim,
-        #         mlp_channels=[
-        #             self.config.state_latent_dim,
-        #         ],
-        #         act_builder=nn.Tanh,
-        #         last_act=True,
-        #         use_layer_norm=True,
-        #     )
-        # )
-        # init_mlp_weights(self.state_proj, nonlinearity="tanh")
-        # self.mix_proj = nn.Sequential(
-        #     *make_mlp(
-        #         in_channels=encoder_out_dim + self.config.state_latent_dim,
-        #         mlp_channels=[256, self.config.mix_proj_hidden_dim],
-        #         act_builder=nn.Tanh,
-        #         last_act=True,
-        #         use_layer_norm=True,
-        #     )
-        # )
-        # init_mlp_weights(self.mix_proj, nonlinearity="tanh")
-
         # Action space critic
         # TODO: what to do for action chunking?
         if self.config.chunk_critic:
@@ -273,8 +239,8 @@ class NoisePolicyForOpenPI(nn.Module, BasePolicy):
         )
         # inputs = jax.tree.map(lambda *x: torch.stack(x, axis=0), inputs)
         if not first_process:
-            inputs["tokenized_prompt"] = obs["tokenized_prompt"]
-            inputs["tokenized_prompt_mask"] = obs["tokenized_prompt_mask"]
+            inputs["tokenized_prompt"] = obs["tokenized_prompt"] if "tokenized_prompt" in obs else None
+            inputs["tokenized_prompt_mask"] = obs["tokenized_prompt_mask"] if "tokenized_prompt_mask" in obs else None
         return inputs
 
     def output_transform(self, outputs):
@@ -295,10 +261,26 @@ class NoisePolicyForOpenPI(nn.Module, BasePolicy):
 
     def preprocess_env_obs(self, env_obs):
         """Preprocess environment observations for noise policy"""
-        agentview_image = env_obs["agentview_image"]
+        images_list = []
+        main_images = env_obs["main_images"]
+
+        # Convert uint8 images to float and normalize to [0,1]
+        if main_images.dtype == torch.uint8:
+            main_images = main_images.float() / 255.0
+
+        images_list.append(main_images)
+        if self.config.num_images_in_input > 1:
+            extra_view_images = env_obs["extra_view_images"]
+
+            # Convert uint8 images to float and normalize to [0,1]
+            if extra_view_images.dtype == torch.uint8:
+                extra_view_images = extra_view_images.float() / 255.0
+
+            if extra_view_images.shape[0] == 1:
+                extra_view_images = extra_view_images.repeat(self.config.num_images_in_input - 1, 1, 1, 1)
+            images_list.append(extra_view_images)
         states = env_obs["states"]
-        curr_img = np.array(cv2.resize(agentview_image, (self.config.image_size[1], self.config.image_size[2]), interpolation=cv2.INTER_AREA)) 
-        return {"main_images": curr_img, "states": states}
+        return {"images": images_list, "states": states}
 
     def preprocess_images(self, images):
         import torch.nn.functional as F
@@ -314,38 +296,17 @@ class NoisePolicyForOpenPI(nn.Module, BasePolicy):
             resized_images.append(img_resized)
         return resized_images
     
-    def get_feature(self, obs):
-        """Extract features from observations (images + states)"""
-        visual_features = []
-        # from image_keys to image_num
-        for img_id in range(self.config.num_images_in_input):
-            if img_id == 0:
-                images = obs["main_images"]
-            else:
-                images = obs["extra_view_images"][:, img_id - 1]
-            if images.shape[3] == 3:
-                # [B, H, W, C] -> [B, C, H, W]
-                images = images.permute(0, 3, 1, 2)
-            visual_features.append(self.encoders[img_id](images))
-        visual_feature = torch.cat(visual_features, dim=-1)
-
-        state_feature = self.state_proj(obs["states"])
-        full_feature = torch.cat([visual_feature, state_feature], dim=-1)
-
-        return full_feature, visual_feature
 
     def forward(self, forward_type=ForwardType.DEFAULT, **kwargs):
-        next_obs = kwargs.get("next_obs")
-        next_obs = self.preprocess_env_obs(next_obs)
 
         if forward_type == ForwardType.SFT:
             return self.sft_forward(**kwargs)
         elif forward_type == ForwardType.SAC:
-            return self.sac_forward(next_obs=next_obs, **kwargs)
+            return self.sac_forward(**kwargs)
         elif forward_type == ForwardType.SAC_Q:
-            return self.sac_q_forward(next_obs=next_obs, **kwargs)
+            return self.sac_q_forward( **kwargs)
         elif forward_type == ForwardType.DISTILL_Q:
-            return self.sac_q_noise_forward(curr_obs=next_obs, **kwargs)
+            return self.sac_q_noise_forward( **kwargs)
         elif forward_type == ForwardType.DEFAULT:
             return self.default_forward(**kwargs)
         else:
@@ -357,13 +318,32 @@ class NoisePolicyForOpenPI(nn.Module, BasePolicy):
         return super().forward(observation, actions)
     
     
-    def sac_forward(self, next_obs, **kwargs):
+    def sac_forward(self, obs, **kwargs):
         """SAC forward pass using Noise Policy"""
-        next_actions, next_log_probs = self.noise_policy(next_obs["main_images"], next_obs["states"])
+        # input transform, alles passt hier nicht, es kommmen next obs im falschen format, states falsches format
+        to_process_obs = self.obs_processor(obs)  # env obs -> policy input obs
+        preprocessed_obs = self.input_transform(to_process_obs, transpose=False)
+        processed_obs = self.precision_processor(preprocessed_obs)
+        observation = _model.Observation.from_dict(processed_obs) # image shape changed to [B, C, H, W]
+        images, img_masks, lang_tokens, lang_masks, state = (
+            self.openpi._preprocess_observation(observation, train=False)
+        )
+        resized_images = self.preprocess_images(images)
+        next_actions, next_log_probs, _ = self.noise_policy(resized_images, state)
         return next_actions, next_log_probs
     
-    def sac_q_forward(self, curr_obs, actions, **kwargs):
-        return self.noise_critic(curr_obs["main_images"], curr_obs["states"], actions)
+    def sac_q_forward(self, obs, actions, **kwargs):
+        # actions = forward_inputs['noise_actions']
+        # input transform
+        to_process_obs = self.obs_processor(obs)  # env obs -> policy input obs
+        preprocessed_obs = self.input_transform(to_process_obs, transpose=False)
+        processed_obs = self.precision_processor(preprocessed_obs)
+        observation = _model.Observation.from_dict(processed_obs) # image shape changed to [B, C, H, W]
+        images, img_masks, lang_tokens, lang_masks, state = (
+            self.openpi._preprocess_observation(observation, train=False)
+        )
+        resized_images = self.preprocess_images(images)
+        return self.noise_critic(resized_images, state, actions)
 
     def default_forward(
         self,
@@ -418,10 +398,15 @@ class NoisePolicyForOpenPI(nn.Module, BasePolicy):
 
     def obs_processor(self, env_obs):
         # base observation
-        processed_obs = {
-            "observation/image": env_obs["main_images"],
-            "prompt": env_obs["task_descriptions"],
-        }
+        if "task_descriptions" in env_obs:
+            processed_obs = {
+                "observation/image": env_obs["main_images"],
+                "prompt": env_obs["task_descriptions"],
+            }
+        else:
+            processed_obs = {
+                "observation/image": env_obs["main_images"],
+            }
         # state observation
         if "calvin" in self.config.openpi["config_name"]:
             state = env_obs["states"]
@@ -517,11 +502,13 @@ class NoisePolicyForOpenPI(nn.Module, BasePolicy):
         )
         actions = self.output_transform(
             {"actions": outputs["actions"], "state": observation.state}
-        )["actions"].numpy()
+        )["actions"] #.numpy()
 
         forward_inputs = {
             "chains": outputs["chains"],
             "denoise_inds": outputs["denoise_inds"],
+            "noise_actions": outputs["noise_actions"], # for sac
+            "action": actions, # for sac
             "observation/image": env_obs["main_images"],
             "observation/state": env_obs["states"],
             "tokenized_prompt": processed_obs["tokenized_prompt"],
@@ -535,10 +522,9 @@ class NoisePolicyForOpenPI(nn.Module, BasePolicy):
         result = {
             "prev_logprobs": outputs["prev_logprobs"],
             "prev_values": outputs["prev_values"],
-            "noise_actions": outputs["noise_actions"],
             "forward_inputs": forward_inputs,
         }
-        return actions, result
+        return actions.cpu().numpy(), result
 
     @torch.no_grad()
     def sample_actions(
@@ -565,16 +551,16 @@ class NoisePolicyForOpenPI(nn.Module, BasePolicy):
         # compute policy-predicted noise chunk (flattened)
         noise_action, _, _ = self.noise_policy(resized_images, state)  # [bsize, action_dim]
         noise_chunk = noise_action.unsqueeze(1).repeat(1, 50, 1)  # [bsize, 50, action_dim]
-        actions, log_probs = self.openpi.sample_actions(device=device, observation=observation, noise=noise_chunk)
+        actions = self.openpi.sample_actions(device=device, observation=observation, noise=noise_chunk)
         # Compute values for RL in action space
         # qs_action = self.action_critic(full_feature, actions)  
         qs_action = torch.zeros((bsize), device=device)
 
         # Placeholder logprobs (parent's sample_actions doesn't return them by default)
-        # log_probs = torch.zeros(
-        #     (bsize, self.config.action_chunk, self.config.action_env_dim),
-        #     device=device,
-        # )
+        log_probs = torch.zeros(
+            (bsize, self.config.action_chunk, self.config.action_env_dim),
+            device=device,
+        )
 
         # chains: [initial noise, denoised actions]
         chains = torch.stack([noise_chunk, actions], dim=1)
