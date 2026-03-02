@@ -259,8 +259,9 @@ class EmbodiedNoiseSACFSDPPolicy(EmbodiedFSDPActor):
         curr_obs = batch["curr_obs"]
         next_obs = batch["next_obs"]
         actions = batch["actions"]
-        if self.cfg.actor.model.use_sac_dsrl:
-            actions = batch["noise_actions"]
+        forward_inputs = batch.get("forward_inputs", None)
+        if self.cfg.actor.model.use_dsrl_sac:
+            actions = forward_inputs["noise_actions"]
 
         with torch.no_grad():
             kwargs = {}
@@ -376,7 +377,7 @@ class EmbodiedNoiseSACFSDPPolicy(EmbodiedFSDPActor):
         kwargs = {}
         if self.cfg.actor.model.model_type in ["openvla", "openvla_oft"]:
             kwargs["temperature"] = self.cfg.algorithm.sampling_params.temperature_train
-        pi, log_pi, shared_feature = self.model(
+        pi, log_pi = self.model(
             forward_type=ForwardType.SAC, obs=curr_obs, **kwargs
         )
         log_pi = log_pi.sum(dim=-1, keepdim=True)  # sum over the chunk dimension
@@ -595,6 +596,7 @@ class EmbodiedNoiseSACFSDPPolicy(EmbodiedFSDPActor):
     @Worker.timer("run_training")
     def run_training(self):
         """SAC training using replay buffer"""
+        breakpoint()
         if self.cfg.actor.get("enable_offload", False):
             self.load_param_and_grad(self.device)
             self.load_optimizer(self.device)
