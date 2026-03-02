@@ -53,6 +53,7 @@ class LiberoEnv(gym.Env):
         self.num_group = self.num_envs // self.group_size
         self.use_fixed_reset_state_ids = cfg.use_fixed_reset_state_ids
         self.specific_reset_id = cfg.get("specific_reset_id", None)
+        self.specific_task_id = cfg.get("specific_task_id", None)
 
         self.ignore_terminations = cfg.ignore_terminations
         self.auto_reset = cfg.auto_reset
@@ -146,7 +147,13 @@ class LiberoEnv(gym.Env):
         )
 
     def _get_random_reset_state_ids(self, num_reset_states):
-        if self.specific_reset_id is not None:
+        if self.specific_task_id is not None:
+            # Convert task_id to reset_state_id (using trial 0)
+            reset_state_id = self._get_reset_state_id_from_task_id(self.specific_task_id, 0)
+            reset_state_ids = reset_state_id * np.ones(
+                (num_reset_states,), dtype=int
+            )
+        elif self.specific_reset_id is not None:
             reset_state_ids = self.specific_reset_id * np.ones(
                 (num_reset_states,), dtype=int
             )
@@ -167,7 +174,13 @@ class LiberoEnv(gym.Env):
         return reset_state_ids
 
     def _get_ordered_reset_state_ids(self, num_reset_states):
-        if self.specific_reset_id is not None:
+        if self.specific_task_id is not None:
+            # Convert task_id to reset_state_id (using trial 0)
+            reset_state_id = self._get_reset_state_id_from_task_id(self.specific_task_id, 0)
+            reset_state_ids = reset_state_id * np.ones(
+                (self.num_group,), dtype=int
+            )
+        elif self.specific_reset_id is not None:
             reset_state_ids = self.specific_reset_id * np.ones(
                 (self.num_group,), dtype=int
             )
@@ -180,6 +193,27 @@ class LiberoEnv(gym.Env):
             ]
             self.start_idx = self.start_idx + num_reset_states
         return reset_state_ids
+
+    def _get_reset_state_id_from_task_id(self, task_id, trial_id=0):
+        """
+        Convert a task_id and trial_id to the corresponding reset_state_id.
+
+        Args:
+            task_id: The task ID (0-89 for LIBERO-90)
+            trial_id: The trial ID within the task (default: 0)
+
+        Returns:
+            The reset_state_id corresponding to this task and trial
+        """
+        if task_id < 0 or task_id >= len(self.trial_id_bins):
+            raise ValueError(f"Task ID {task_id} is out of range [0, {len(self.trial_id_bins) - 1}]")
+
+        if trial_id < 0 or trial_id >= self.trial_id_bins[task_id]:
+            raise ValueError(f"Trial ID {trial_id} is out of range [0, {self.trial_id_bins[task_id] - 1}] for task {task_id}")
+
+        # Calculate the reset_state_id: sum of trials for all previous tasks + trial_id
+        reset_state_id = sum(self.trial_id_bins[:task_id]) + trial_id
+        return reset_state_id
 
     def _get_task_and_trial_ids_from_reset_state_ids(self, reset_state_ids):
         task_ids = []
