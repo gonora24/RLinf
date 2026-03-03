@@ -30,7 +30,7 @@ runner:
 
   only_eval: False
   val_check_interval: -1
-  save_interval: 40
+  save_interval: 20
 
   resume_dir: null # Optional: path to a saved checkpoint directory, such as 'checkpoints/global_step_10'. If not None, it will be used to resume training.
   ckpt_path: null 
@@ -43,7 +43,7 @@ algorithm:
   agg_q: min
   adv_type: noise_policy_openpi # does not matter for noise policy so just put anything here
   reward_coef: 1.0 # scale up step reward by this factor
-  rollout_epoch: 1
+  rollout_epoch: 4
   eval_rollout_epoch: 1 # set eval_rollout_epoch > 0 when enable runner.only_eval or runner.val_check_interval > 0
   entropy_tuning:
     target_entropy: -16 # target entropy for entropy tuning -d/2 -> 32/2 = 16
@@ -73,16 +73,16 @@ algorithm:
 
   replay_buffer:
     enable_cache: True
-    cache_size: 200 # changed due to memory error
-    sample_window_size: 200
-    min_buffer_size: 50 #1 changed for debugging
+    cache_size: 100 # changed due to memory error
+    sample_window_size: 100
+    min_buffer_size: 2 #1 changed for debugging
 
 env:
   group_name: "EnvGroup"
   enable_offload: False
 
   train:
-    total_num_envs: 16
+    total_num_envs: 8
     max_episode_steps: 400 #480 # max episode steps for truncation
     max_steps_per_rollout_epoch: 400 #480 #400 aus dsrl code
     # specific_reset_id: 2850  # Use this for reset_state_id (spans all tasks/trials)
@@ -90,7 +90,7 @@ env:
     reward_coef: ${algorithm.reward_coef}
     group_size: ${algorithm.group_size}
   eval:
-    total_num_envs: 64
+    total_num_envs: 32
     auto_reset: True
     ignore_terminations: True
     max_episode_steps: 400 #480
