@@ -1,5 +1,6 @@
 #!/bin/bash
 #SBATCH --ntasks=1
+#SBATCH --nodes=1
 #SBATCH --gres=gpu:1 
 #SBATCH --job-name=train_embodiment
 
@@ -15,4 +16,4 @@ module load devel/cuda
 
 source openpi-venv/bin/activate
 
-bash examples/embodiment/run_embodiment.sh libero_90_noise_sac_openpi05 #maniskill_ppo_openpi_pi05 #libero_goal_ppo_openpi_pi05_resume
+bash examples/embodiment/run_embodiment.sh libero_spatial_ppo_openpi_quickstart #libero_90_noise_sac_openpi05 #maniskill_ppo_openpi_pi05 #libero_goal_ppo_openpi_pi05_resume
