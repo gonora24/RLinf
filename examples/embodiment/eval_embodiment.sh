@@ -1,11 +1,16 @@
 #! /bin/bash
 
-export EMBODIED_PATH="$( cd "$(dirname "${BASH_SOURCE[0]}" )" && pwd )"
-export REPO_PATH=$(dirname $(dirname "$EMBODIED_PATH"))
+# Set absolute repo path (for sbatch compatibility)
+export REPO_PATH="/home/ka/ka_anthropomatik/ka_eu3660/projects/RLinf"
+export EMBODIED_PATH="${REPO_PATH}/examples/embodiment"
 export SRC_FILE="${EMBODIED_PATH}/eval_embodied_agent.py"
+export ABS_LOG_DIR="/pfs/work9/workspace/scratch/ka_eu3660-rlinf_tmp/"
 
-export MUJOCO_GL="osmesa"
-export PYOPENGL_PLATFORM="osmesa"
+# Activate venv with absolute path
+source "${REPO_PATH}/openpi-venv/bin/activate"
+
+export MUJOCO_GL="egl"
+export PYOPENGL_PLATFORM="egl"
 export PYTHONPATH=${REPO_PATH}:$PYTHONPATH
 
 # Base path to the BEHAVIOR dataset, which is the BEHAVIOR-1k repo's dataset folder
@@ -37,7 +42,7 @@ ROBOT_PLATFORM=${2:-${ROBOT_PLATFORM:-"LIBERO"}}
 export ROBOT_PLATFORM
 echo "Using ROBOT_PLATFORM=$ROBOT_PLATFORM"
 
-LOG_DIR="${REPO_PATH}/logs/$(date +'%Y%m%d-%H:%M:%S')" #/$(date +'%Y%m%d-%H:%M:%S')"
+LOG_DIR="${ABS_LOG_DIR}eval_logs/$(date +'%Y%m%d-%H:%M:%S')-${CONFIG_NAME}" #/$(date +'%Y%m%d-%H:%M:%S')"
 MEGA_LOG_FILE="${LOG_DIR}/eval_embodiment.log"
 mkdir -p "${LOG_DIR}"
 CMD="python ${SRC_FILE} --config-path ${EMBODIED_PATH}/config/ --config-name ${CONFIG_NAME} runner.logger.log_path=${LOG_DIR}"
