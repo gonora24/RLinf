@@ -77,6 +77,7 @@ class OpenPi0Config(Pi0Config):
     dsrl_hidden_dims: tuple = field(
         default_factory=lambda: (128, 128, 128)
     )  # Hidden dims for Q-head and GaussianPolicy
+    use_action_chunking: bool = False  # use action chunking for DSRL
 
 
 class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
@@ -190,14 +191,19 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
             dsrl_input_dim = (
                 self.config.dsrl_state_latent_dim + self.config.dsrl_image_latent_dim
             )  # e.g. 64 + 64 = 128
-
+            if self.config.use_action_chunking:
+                output_dim = self.config.dsrl_action_noise_dim * self.config.action_horizon #from pi train config
+                action_horizon = self.config.action_horizon
+            else:
+                output_dim = self.config.dsrl_action_noise_dim
+                action_horizon = 1
             self.dsrl_action_noise_net = GaussianPolicy(
                 input_dim=dsrl_input_dim,
-                output_dim=self.config.dsrl_action_noise_dim,
+                output_dim=output_dim,
                 hidden_dims=self.config.dsrl_hidden_dims,
                 low=None,
                 high=None,
-                action_horizon=self.config.action_horizon,
+                action_horizon=action_horizon,
             ).to(dtype=_dsrl_dtype)
 
             self.actor_image_encoder = LightweightImageEncoder64(
@@ -218,10 +224,14 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
                 state_dim=self.config.dsrl_state_dim,
                 hidden_dim=self.config.dsrl_state_latent_dim,
             ).to(dtype=_dsrl_dtype)
+            if self.config.use_action_chunking:
+                action_dim = self.config.dsrl_action_noise_dim * self.config.action_horizon
+            else:
+                action_dim = self.config.dsrl_action_noise_dim
             self.q_head = CompactMultiQHead(
                 state_dim=self.config.dsrl_state_latent_dim,
                 image_dim=self.config.dsrl_image_latent_dim,
-                action_dim=self.config.dsrl_action_noise_dim,
+                action_dim=action_dim,
                 hidden_dims=self.config.dsrl_hidden_dims,
                 num_q_heads=self.config.dsrl_num_q_heads,
                 output_dim=1,
@@ -1095,8 +1105,10 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
             state_features = state_features.detach()
 
         # Process actions (DSRL: should be noise, already flattened)
-        if actions.dim() == 3:
-            actions = actions[:, 0, :]  # [B, action_horizon, dim] -> [B, dim]
+        if actions.dim() == 3 and not self.config.use_action_chunking:
+            actions = actions[:, 0, :]  # [B, action_horizon, dim] -> [B, dim] dim=32
+        else:
+            actions = actions.flatten(start_dim=1, end_dim=2) # [B, action_horizon, dim] -> [B, action_horizon * dim]
 
         # Compute Q values
         q_values = self.q_head(state_features, image_features, actions)

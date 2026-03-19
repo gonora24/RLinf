@@ -314,10 +314,19 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
         bootstrap_type = self.cfg.algorithm.get("bootstrap_type", "standard")
         agg_q = self.cfg.algorithm.get("agg_q", "min")
         use_dsrl = self.cfg.actor.model.get("openpi", {}).get("use_dsrl", False)
+        use_action_chunking = self.cfg.actor.model.get("openpi", {}).get("use_action_chunking", False)
         if use_dsrl:
             num_action_chunks = self.cfg.actor.model.get("num_action_chunks", 1)
             discount = self.cfg.algorithm.gamma**num_action_chunks
-            rewards_for_bootstrap = batch["rewards"][:, 0:1].to(self.torch_dtype)
+            if use_action_chunking:
+                action_horizon = batch["actions"].shape[1]
+                batch_dim = batch["actions"].shape[0]
+                exponents = torch.arange(1, action_horizon + 1).float() # [1, 2, ..., H]
+                gamma_powers = torch.pow(self.cfg.algorithm.gamma, exponents) #[gamma^1, gamma^2, ..., gamma^H], Shape: (H,)
+                gamma_powers = gamma_powers.unsqueeze(0).expand(batch_dim, -1).to(self.device) # Shape: (B, H)
+                rewards_for_bootstrap = (batch["rewards"] * gamma_powers).sum(dim=-1, keepdim=True).to(self.torch_dtype)
+            else:
+                rewards_for_bootstrap = batch["rewards"][:, 0:1].to(self.torch_dtype)
         else:
             discount = self.cfg.algorithm.gamma
             rewards_for_bootstrap = (

@@ -284,9 +284,12 @@ class GaussianPolicy(nn.Module):
 
         # Expand to action_horizon (after computing log_prob)
         # This matches the diffusion model's input format
-        action = action.unsqueeze(1).repeat(
-            1, self.action_horizon, 1
-        )  # [B, action_horizon, output_dim]
+        if self.action_horizon > 1:
+            action = action.reshape(-1, self.action_horizon, 32) # noise is always 32 dim [B, action_horizon, 32]
+        else:
+            action = action.unsqueeze(1).repeat(
+                1, self.action_horizon, 1
+            )  # [B, action_horizon, output_dim]
 
         return action, log_prob
 
