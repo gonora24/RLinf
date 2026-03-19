@@ -22,15 +22,18 @@ runner:
   logger:
     log_path: "../results"
     project_name: rlinf
-    experiment_name: "libero_spatial_dsrl_openpi"
+    experiment_name: "libero_spatial_dsrl_openpi_eval"
     logger_backends: ["wandb"]
 
   max_epochs: 20000
   max_steps: -1
 
-  only_eval: False
-  val_check_interval: -1
-  save_interval: 40
+  only_eval: True
+  val_check_interval: 10
+  save_interval: 30
+
+  resume_dir: null #"/pfs/work9/workspace/scratch/ka_eu3660-rlinf_tmp/logs/20260309-07:20:10-libero_spatial_dsrl_openpi/libero_spatial_dsrl_openpi/checkpoints/global_step_40"
+  ckpt_path: "/pfs/work9/workspace/scratch/ka_eu3660-rlinf_tmp/logs/20260309-07:20:10-libero_spatial_dsrl_openpi/libero_spatial_dsrl_openpi/checkpoints/global_step_40/actor/model_state_dict/full_weights.pt"
 
 algorithm:
   normalize_advantages: False
@@ -39,7 +42,7 @@ algorithm:
   reward_coef: 1.0
 
   rollout_epoch: 1
-  eval_rollout_epoch: 1
+  eval_rollout_epoch: 20 #1
 
   reward_type: chunk_level
   logprob_type: chunk_level
@@ -111,7 +114,7 @@ env:
     specific_reset_id: 0
     use_ordered_reset_state_ids: True
   eval:
-    total_num_envs: 500
+    total_num_envs: 25 #500
     auto_reset: True
     use_rel_reward: False
     use_step_penalty: True

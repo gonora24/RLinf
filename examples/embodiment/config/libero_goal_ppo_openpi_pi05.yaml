@@ -20,19 +20,19 @@ cluster:
 runner:
   task_type: embodied
   logger:
-    log_path: "../results"
+    log_path: "../results" 
     project_name: rlinf
     experiment_name: "libero_goal_ppo_openpi_pi05"
-    logger_backends: ["tensorboard"] # wandb, swanlab
+    logger_backends: ["wandb"] # wandb, swanlab
 
   max_epochs: 1000
-  max_steps: -1
+  max_steps: 1000000  # Set to a large number for unlimited training
 
   only_eval: False
-  val_check_interval: -1
+  val_check_interval: 10
   save_interval: 40
 
-  resume_dir: null # Optional: path to a saved checkpoint directory, such as 'checkpoints/global_step_10'. If not None, it will be used to resume training.
+  resume_dir: "/pfs/work9/workspace/scratch/ka_eu3660-rlinf_tmp/logs/20260306-19:22:52-libero_goal_ppo_openpi_pi05/libero_goal_ppo_openpi_pi05/checkpoints/global_step_80" # Optional: path to a saved checkpoint directory, such as 'checkpoints/global_step_10'. If not None, it will be used to resume training.
   ckpt_path: null  # Optional: path to a .pt checkpoint. If not None, it will be loaded after the model is instantiated (for evaluation).
 
 algorithm:
@@ -41,12 +41,12 @@ algorithm:
   group_size: 1
   reward_coef: 1.0
   rollout_epoch: 8
-  eval_rollout_epoch: 1 # set eval_rollout_epoch > 0 when enable runner.only_eval or runner.val_check_interval > 0
+  eval_rollout_epoch: 20 # set eval_rollout_epoch > 0 when enable runner.only_eval or runner.val_check_interval > 0
 
   reward_type: chunk_level
   logprob_type: chunk_level
   entropy_type: token_level
-  update_epoch: 4
+  update_epoch: 3
 
   adv_type: gae
   loss_type: actor_critic
@@ -84,14 +84,15 @@ algorithm:
 
 env:
   group_name: "EnvGroup"
+  enable_offload: False
 
   # Override the default values in env/libero_goal
   train:
-    total_num_envs: 64
+    total_num_envs: 32 #64
     max_episode_steps: 320 # max episode steps for truncation
     max_steps_per_rollout_epoch: 320
   eval:
-    total_num_envs: 500
+    total_num_envs: 25 #500
     auto_reset: True
     ignore_terminations: True
     max_episode_steps: 320
@@ -112,20 +113,20 @@ rollout:
   pipeline_stage_num: 1
 
   model:
-    model_path: "/path/to/model/RLinf-Pi05-SFT"
+    model_path: "./RLinf-Pi05-LIBERO-SFT"
     precision: ${actor.model.precision}
 
 actor:
   group_name: "ActorGroup"
   training_backend: "fsdp"
-  micro_batch_size: 128
-  global_batch_size: 2048 # maximum : global batch size = micro batch size * actor num_processes.
+  micro_batch_size: 128 #64 #128
+  global_batch_size: 2048 #2048 # maximum : global batch size = micro batch size * actor num_processes.
   seed: 42
   enable_offload: False
 
   # Override the default values in model/pi0_5
   model:
-    model_path: "/path/to/model/RLinf-Pi05-SFT"
+    model_path: "./RLinf-Pi05-LIBERO-SFT"
     model_type: "openpi"
     add_value_head: True
     num_action_chunks: 5
