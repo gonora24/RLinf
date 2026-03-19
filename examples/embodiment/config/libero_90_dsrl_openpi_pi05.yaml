@@ -1,7 +1,7 @@
 defaults:
   - env/libero_90@env.train
   - env/libero_90@env.eval
-  - model/pi0@actor.model
+  - model/pi0_5@actor.model
   - training_backend/fsdp@actor.fsdp_config
   - override hydra/job_logging: stdout
 
@@ -22,18 +22,18 @@ runner:
   logger:
     log_path: "../results"
     project_name: rlinf
-    experiment_name: "libero_90_dsrl_openpi"
+    experiment_name: "libero_90_dsrl_openpi_pi05"
     logger_backends: ["wandb"]
 
   max_epochs: 20000
-  max_steps: -1
+  max_steps: 1000000 # Set to a large number for unlimited training
 
-  only_eval: True
+  only_eval: False
   val_check_interval: 10
-  save_interval: 40
+  save_interval: 20
 
-  resume_dir: null
-  ckpt_path: "/pfs/work9/workspace/scratch/ka_eu3660-rlinf_tmp/logs/20260305-14:26:30-libero_90_dsrl_openpi/libero_90_dsrl_openpi/checkpoints/global_step_40/actor/model_state_dict/full_weights.pt"
+  resume_dir: "/pfs/work9/workspace/scratch/ka_eu3660-rlinf_tmp/logs/20260311-20:43:03-libero_90_dsrl_openpi_pi05/libero_90_dsrl_openpi_pi05/checkpoints/global_step_40"
+  ckpt_path: null
 
 algorithm:
   normalize_advantages: False
@@ -42,7 +42,7 @@ algorithm:
   reward_coef: 1.0
 
   rollout_epoch: 1
-  eval_rollout_epoch: 1
+  eval_rollout_epoch: 1 #2
 
   reward_type: chunk_level
   logprob_type: chunk_level
@@ -114,7 +114,7 @@ env:
     specific_reset_id: 2850
     use_ordered_reset_state_ids: True
   eval:
-    total_num_envs: 16
+    total_num_envs: 4 #16 with eval rollout epoch essentially lowered for faster training
     auto_reset: True
     use_rel_reward: False
     use_step_penalty: True
@@ -140,7 +140,7 @@ rollout:
   collect_prev_infos: False
 
   model:
-    model_path: "./RLinf-Pi0-LIBERO-Long-SFT" # https://huggingface.co/RLinf/RLinf-Pi0-LIBERO-Long-SFT
+    model_path: "./RLinf-Pi05-LIBERO-SFT" # https://huggingface.co/RLinf/RLinf-Pi05-LIBERO-SFT
     precision: ${actor.model.precision}
 
 actor:
@@ -152,7 +152,7 @@ actor:
   enable_offload: False
 
   model:
-    model_path: "./RLinf-Pi0-LIBERO-Long-SFT" # https://huggingface.co/RLinf/RLinf-Pi0-LIBERO-Long-SFT
+    model_path: "./RLinf-Pi05-LIBERO-SFT" # https://huggingface.co/RLinf/RLinf-Pi05-LIBERO-SFT
     num_action_chunks: 5
     add_value_head: False
     add_q_head: True
