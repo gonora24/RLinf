@@ -19,6 +19,7 @@ is_eval: False
 
 seed: 0
 group_size: 1
+task_id: null
 
 video_cfg:
   save_video: True
