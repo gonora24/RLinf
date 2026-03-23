@@ -1,7 +1,12 @@
 #! /bin/bash
 
 # Set absolute repo path (for sbatch compatibility)
-export REPO_PATH="/home/ka/ka_anthropomatik/ka_eu3660/projects/RLinf"
+if [ "$ARVIND" == 0 ]; then
+    export REPO_PATH="/home/ka/ka_anthropomatik/ka_eu3660/projects/RLinf"
+else
+    export REPO_PATH="/home/ka/ka_anthropomatik/ka_db6855/projects/RLinf"
+fi
+
 export EMBODIED_PATH="${REPO_PATH}/examples/embodiment"
 export SRC_FILE="${EMBODIED_PATH}/train_embodied_agent.py"
 export ABS_LOG_DIR="/pfs/work9/workspace/scratch/ka_eu3660-rlinf_tmp"
