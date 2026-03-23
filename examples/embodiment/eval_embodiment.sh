@@ -7,7 +7,7 @@ export SRC_FILE="${EMBODIED_PATH}/eval_embodied_agent.py"
 export ABS_LOG_DIR="/pfs/work9/workspace/scratch/ka_eu3660-rlinf_tmp/"
 
 # Activate venv with absolute path
-source "${REPO_PATH}/openpi-venv/bin/activate"
+# source "${REPO_PATH}/openpi-venv/bin/activate"
 
 export MUJOCO_GL="egl"
 export PYOPENGL_PLATFORM="egl"
