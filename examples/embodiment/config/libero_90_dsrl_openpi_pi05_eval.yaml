@@ -22,14 +22,14 @@ runner:
   logger:
     log_path: "../results"
     project_name: rlinf
-    experiment_name: "libero_90_dsrl_task50_pi05"
+    experiment_name: "libero_90_task50_pi05_eval"
     logger_backends: ["wandb"]
 
   max_epochs: 20000
   max_steps: -1 # Set to a large number for unlimited training
 
-  only_eval: False
-  val_check_interval: -1
+  only_eval: True
+  val_check_interval: 10
   save_interval: 20
 
   resume_dir: null
@@ -42,7 +42,7 @@ algorithm:
   reward_coef: 1.0
 
   rollout_epoch: 1
-  eval_rollout_epoch: 1 #2
+  eval_rollout_epoch: 8 #2
 
   reward_type: chunk_level
   logprob_type: chunk_level

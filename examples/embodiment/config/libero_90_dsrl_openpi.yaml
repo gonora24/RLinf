@@ -22,18 +22,18 @@ runner:
   logger:
     log_path: "../results"
     project_name: rlinf
-    experiment_name: "libero_90_dsrl_openpi"
+    experiment_name: "libero_90_dsrl_task57_openpi"
     logger_backends: ["wandb"]
 
   max_epochs: 20000
   max_steps: -1
 
-  only_eval: True
+  only_eval: False
   val_check_interval: 10
   save_interval: 40
 
   resume_dir: null
-  ckpt_path: "/pfs/work9/workspace/scratch/ka_eu3660-rlinf_tmp/logs/20260305-14:26:30-libero_90_dsrl_openpi/libero_90_dsrl_openpi/checkpoints/global_step_40/actor/model_state_dict/full_weights.pt"
+  ckpt_path: null
 
 algorithm:
   normalize_advantages: False
@@ -76,12 +76,12 @@ algorithm:
     enable_cache: True
     cache_size: 200 #15000
     sample_window_size: 200 #15000
-    min_buffer_size: 10
+    min_buffer_size: 2 #10
     auto_save: False
 
   target_update_freq: 1
   target_update_type: all
-  train_actor_steps: 10
+  train_actor_steps: 1 #10
 
   filter_rewards: False
   rewards_lower_bound: 0.1
@@ -105,15 +105,17 @@ env:
   enable_offload: False
 
   train:
+    task_id: 57
     total_num_envs: 16
     auto_reset: False
     use_rel_reward: False
     use_step_penalty: True
     max_episode_steps: 240
     max_steps_per_rollout_epoch: 240
-    specific_reset_id: 2850
+    specific_reset_id: null
     use_ordered_reset_state_ids: True
   eval:
+    task_id: 57
     total_num_envs: 16
     auto_reset: True
     use_rel_reward: False
@@ -123,7 +125,7 @@ env:
     max_steps_per_rollout_epoch: 240
     is_eval: True
     group_size: 1
-    specific_reset_id: 2850
+    specific_reset_id: null
     use_ordered_reset_state_ids: True
     video_cfg:
       save_video: True
@@ -153,7 +155,7 @@ actor:
 
   model:
     model_path: "./RLinf-Pi0-LIBERO-Long-SFT" # https://huggingface.co/RLinf/RLinf-Pi0-LIBERO-Long-SFT
-    num_action_chunks: 5
+    num_action_chunks: 20 #5
     add_value_head: False
     add_q_head: True
     q_head_type: "default"
@@ -169,6 +171,7 @@ actor:
       train_expert_only: True
       detach_critic_input: True
       noise_method: "reinflow"
+      use_action_chunking: False
 
   optim:
     lr: 1.0e-4

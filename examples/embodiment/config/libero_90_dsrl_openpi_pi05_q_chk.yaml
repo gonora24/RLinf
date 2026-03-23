@@ -22,14 +22,14 @@ runner:
   logger:
     log_path: "../results"
     project_name: rlinf
-    experiment_name: "libero_90_dsrl_openpi_pi05_q_chk"
+    experiment_name: "libero_90_dsrl_task50_pi05_q_chk"
     logger_backends: ["wandb"]
 
   max_epochs: 20000
   max_steps: -1 # Set to a large number for unlimited training
 
   only_eval: False
-  val_check_interval: 10
+  val_check_interval: -1
   save_interval: 20
 
   resume_dir: null
@@ -105,15 +105,17 @@ env:
   enable_offload: False
 
   train:
+    task_id: 50
     total_num_envs: 16
     auto_reset: False
     use_rel_reward: False
     use_step_penalty: True
     max_episode_steps: 240
     max_steps_per_rollout_epoch: 240
-    specific_reset_id: 2850
+    specific_reset_id: null
     use_ordered_reset_state_ids: True
   eval:
+    task_id: 50
     total_num_envs: 4 #16 with eval rollout epoch essentially lowered for faster training
     auto_reset: True
     use_rel_reward: False
@@ -123,7 +125,7 @@ env:
     max_steps_per_rollout_epoch: 240
     is_eval: True
     group_size: 1
-    specific_reset_id: 2850
+    specific_reset_id: null
     use_ordered_reset_state_ids: True
     video_cfg:
       save_video: True
