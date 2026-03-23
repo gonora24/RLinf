@@ -47,6 +47,7 @@ class LiberoEnv(gym.Env):
         self.num_group = self.num_envs // self.group_size
         self.use_fixed_reset_state_ids = cfg.use_fixed_reset_state_ids
         self.specific_reset_id = cfg.get("specific_reset_id", None)
+        self.selected_task_id = cfg.get("task_id", None)
 
         self.ignore_terminations = cfg.ignore_terminations
         self.auto_reset = cfg.auto_reset
@@ -56,6 +57,7 @@ class LiberoEnv(gym.Env):
         self.start_idx = 0
 
         self.task_suite: Benchmark = get_benchmark_overridden(cfg.task_suite_name)()
+        self._validate_task_id()
 
         self._compute_total_num_group_envs()
         self.reset_state_ids_all = self.get_reset_state_ids_all()
@@ -119,12 +121,27 @@ class LiberoEnv(gym.Env):
 
     def _compute_total_num_group_envs(self):
         self.total_num_group_envs = 0
+        if self.selected_task_id is None:
+            self.available_task_ids = list(range(self.task_suite.get_num_tasks()))
+        else:
+            self.available_task_ids = [self.selected_task_id]
         self.trial_id_bins = []
-        for task_id in range(self.task_suite.get_num_tasks()):
+        for task_id in self.available_task_ids:
             task_num_trials = len(self.task_suite.get_task_init_states(task_id))
             self.trial_id_bins.append(task_num_trials)
             self.total_num_group_envs += task_num_trials
         self.cumsum_trial_id_bins = np.cumsum(self.trial_id_bins)
+
+    def _validate_task_id(self):
+        if self.selected_task_id is None:
+            return
+
+        num_tasks = self.task_suite.get_num_tasks()
+        if not 0 <= self.selected_task_id < num_tasks:
+            raise ValueError(
+                f"Invalid task_id={self.selected_task_id}. "
+                f"Expected an integer in [0, {num_tasks - 1}]."
+            )
 
     def update_reset_state_ids(self):
         if self.cfg.is_eval or self.cfg.use_ordered_reset_state_ids:
@@ -180,9 +197,9 @@ class LiberoEnv(gym.Env):
         # get task id and trial id from reset state ids
         for reset_state_id in reset_state_ids:
             start_pivot = 0
-            for task_id, end_pivot in enumerate(self.cumsum_trial_id_bins):
+            for task_idx, end_pivot in enumerate(self.cumsum_trial_id_bins):
                 if reset_state_id < end_pivot and reset_state_id >= start_pivot:
-                    task_ids.append(task_id)
+                    task_ids.append(self.available_task_ids[task_idx])
                     trial_ids.append(reset_state_id - start_pivot)
                     break
                 start_pivot = end_pivot
