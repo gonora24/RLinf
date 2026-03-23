@@ -193,17 +193,15 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
             )  # e.g. 64 + 64 = 128
             if self.config.use_action_chunking:
                 output_dim = self.config.dsrl_action_noise_dim * self.config.action_horizon #from pi train config
-                action_horizon = self.config.action_horizon
             else:
                 output_dim = self.config.dsrl_action_noise_dim
-                action_horizon = 1
             self.dsrl_action_noise_net = GaussianPolicy(
                 input_dim=dsrl_input_dim,
                 output_dim=output_dim,
                 hidden_dims=self.config.dsrl_hidden_dims,
                 low=None,
                 high=None,
-                action_horizon=action_horizon,
+                action_horizon=self.config.action_horizon,
             ).to(dtype=_dsrl_dtype)
 
             self.actor_image_encoder = LightweightImageEncoder64(
