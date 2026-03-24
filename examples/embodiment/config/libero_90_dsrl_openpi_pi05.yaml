@@ -22,7 +22,7 @@ runner:
   logger:
     log_path: "../results"
     project_name: rlinf
-    experiment_name: "libero_90_dsrl_task20_pi05"
+    experiment_name: "libero_90_dsrl_task50_pi05"
     logger_backends: ["wandb"]
 
   max_epochs: 20000
@@ -105,7 +105,7 @@ env:
   enable_offload: False
 
   train:
-    task_id: 20
+    task_id: 50
     total_num_envs: 16
     auto_reset: False
     use_rel_reward: False
@@ -113,9 +113,9 @@ env:
     max_episode_steps: 320 #240
     max_steps_per_rollout_epoch: 320 #240
     specific_reset_id: null
-    use_ordered_reset_state_ids: True
+    use_ordered_reset_state_ids: False
   eval:
-    task_id: 20
+    task_id: 50
     total_num_envs: 4 #16 with eval rollout epoch essentially lowered for faster training
     auto_reset: True
     use_rel_reward: False
@@ -155,7 +155,7 @@ actor:
 
   model:
     model_path: "./RLinf-Pi05-LIBERO-SFT" # https://huggingface.co/RLinf/RLinf-Pi05-LIBERO-SFT
-    num_action_chunks: 10 #5
+    num_action_chunks: 5 #5
     add_value_head: False
     add_q_head: True
     q_head_type: "default"
