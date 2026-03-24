@@ -10,8 +10,10 @@ export WANDB_USERNAME='noragorhan'
 export WANDB_TEAM='noras-masterarbeit'
 export WANDB_RUN_GROUP='DSRL'
 export WANDB_JOB_TYPE='eval'
+# export WANDB_MODE='offline'
 
 export DEBUG=0
+export ARVIND=0
 
 module load devel/miniforge
 module load devel/cuda

@@ -1,6 +1,5 @@
 #! /bin/bash
 
-export ARVIND=0
 # Set absolute repo path (for sbatch compatibility)
 if [ "$ARVIND" == 0 ]; then
     export REPO_PATH="/home/ka/ka_anthropomatik/ka_eu3660/projects/RLinf"
