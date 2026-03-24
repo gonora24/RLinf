@@ -20,4 +20,4 @@ module load devel/cuda
 
 source openpi-venv/bin/activate
 
-bash examples/embodiment/run_embodiment.sh libero_90_dsrl_openpi_pi05 #libero_90_dsrl_openpi #libero_90_noise_sac_openpi05 #maniskill_ppo_openpi_pi05 #libero_goal_ppo_openpi_pi05_resume
+bash examples/embodiment/run_embodiment.sh libero_90_dsrl_openpi_pi05 #libero_90_dsrl_openpi_pi05_q_chk
