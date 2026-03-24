@@ -22,7 +22,7 @@ runner:
   logger:
     log_path: "../results"
     project_name: rlinf
-    experiment_name: "libero_90_dsrl_task50_pi05"
+    experiment_name: "libero_90_dsrl_task20_pi05"
     logger_backends: ["wandb"]
 
   max_epochs: 20000
@@ -105,7 +105,7 @@ env:
   enable_offload: False
 
   train:
-    task_id: 50
+    task_id: 20
     total_num_envs: 16
     auto_reset: False
     use_rel_reward: False
@@ -115,7 +115,7 @@ env:
     specific_reset_id: null
     use_ordered_reset_state_ids: True
   eval:
-    task_id: 50
+    task_id: 20
     total_num_envs: 4 #16 with eval rollout epoch essentially lowered for faster training
     auto_reset: True
     use_rel_reward: False

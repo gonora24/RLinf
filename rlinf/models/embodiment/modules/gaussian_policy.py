@@ -286,6 +286,7 @@ class GaussianPolicy(nn.Module):
         # This matches the diffusion model's input format
         if self.output_dim > 32: # check if action is chunked
             action = action.reshape(-1, self.action_horizon, 32) # noise is always 32 dim [B, action_horizon, 32]
+            log_prob = log_prob / self.action_horizon # normalize bc log prob is summed over all dimensions
         else:
             action = action.unsqueeze(1).repeat(
                 1, self.action_horizon, 1
