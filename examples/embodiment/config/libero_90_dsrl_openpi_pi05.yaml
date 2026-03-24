@@ -26,13 +26,13 @@ runner:
     logger_backends: ["wandb"]
 
   max_epochs: 20000
-  max_steps: 200000 # Set to a large number for unlimited training
+  max_steps: -1 # Set to a large number for unlimited training
 
   only_eval: False
   val_check_interval: -1
   save_interval: 20
 
-  resume_dir: "/pfs/work9/workspace/scratch/ka_eu3660-rlinf_tmp/logs/20260323-17:39:11-libero_90_dsrl_openpi_pi05/libero_90_dsrl_task50_pi05/checkpoints/global_step_20"
+  resume_dir: null #"/pfs/work9/workspace/scratch/ka_eu3660-rlinf_tmp/logs/20260323-17:39:11-libero_90_dsrl_openpi_pi05/libero_90_dsrl_task50_pi05/checkpoints/global_step_20"
   ckpt_path: null
 
 algorithm:
@@ -110,8 +110,8 @@ env:
     auto_reset: False
     use_rel_reward: False
     use_step_penalty: True
-    max_episode_steps: 240
-    max_steps_per_rollout_epoch: 240
+    max_episode_steps: 320 #240
+    max_steps_per_rollout_epoch: 320 #240
     specific_reset_id: null
     use_ordered_reset_state_ids: True
   eval:
@@ -121,8 +121,8 @@ env:
     use_rel_reward: False
     use_step_penalty: True
     ignore_terminations: True
-    max_episode_steps: 240
-    max_steps_per_rollout_epoch: 240
+    max_episode_steps: 320 #240
+    max_steps_per_rollout_epoch: 320 #240
     is_eval: True
     group_size: 1
     specific_reset_id: null
