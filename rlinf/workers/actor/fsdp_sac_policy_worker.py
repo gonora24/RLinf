@@ -319,10 +319,10 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
             num_action_chunks = self.cfg.actor.model.get("num_action_chunks", 1)
             discount = self.cfg.algorithm.gamma**num_action_chunks
             if use_action_chunking:
-                action_horizon = batch["actions"].shape[1]
+                self.action_horizon = batch["actions"].shape[1]
                 batch_dim = batch["actions"].shape[0]
-                exponents = torch.arange(1, action_horizon + 1).float() # [1, 2, ..., H]
-                gamma_powers = torch.pow(self.cfg.algorithm.gamma, exponents) #[gamma^1, gamma^2, ..., gamma^H], Shape: (H,)
+                exponents = torch.arange(0, self.action_horizon).float() # [0, 1, 2, ..., H-1]
+                gamma_powers = torch.pow(self.cfg.algorithm.gamma, exponents) #[gamma^0, gamma^1, ..., gamma^H-1], Shape: (H,)
                 gamma_powers = gamma_powers.unsqueeze(0).expand(batch_dim, -1).to(self.device) # Shape: (B, H)
                 rewards_for_bootstrap = (batch["rewards"] * gamma_powers).sum(dim=-1, keepdim=True).to(self.torch_dtype)
             else:
