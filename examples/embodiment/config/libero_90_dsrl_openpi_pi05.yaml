@@ -26,13 +26,13 @@ runner:
     logger_backends: ["wandb"]
 
   max_epochs: 20000
-  max_steps: -1 # Set to a large number for unlimited training
+  max_steps: 200000 # Set to a large number for unlimited training
 
   only_eval: False
   val_check_interval: -1
   save_interval: 20
 
-  resume_dir: null #"/pfs/work9/workspace/scratch/ka_eu3660-rlinf_tmp/logs/20260323-17:39:11-libero_90_dsrl_openpi_pi05/libero_90_dsrl_task50_pi05/checkpoints/global_step_20"
+  resume_dir: "/pfs/work9/workspace/scratch/ka_eu3660-rlinf_tmp/logs/20260325-08:59:26-libero_90_dsrl_openpi_pi05/libero_90_dsrl_task50_pi05/checkpoints/global_step_20"
   ckpt_path: null
 
 algorithm:
@@ -113,7 +113,7 @@ env:
     max_episode_steps: 320 #240
     max_steps_per_rollout_epoch: 320 #240
     specific_reset_id: null
-    use_ordered_reset_state_ids: False
+    use_ordered_reset_state_ids: True
   eval:
     task_id: 50
     total_num_envs: 4 #16 with eval rollout epoch essentially lowered for faster training
@@ -155,7 +155,8 @@ actor:
 
   model:
     model_path: "./RLinf-Pi05-LIBERO-SFT" # https://huggingface.co/RLinf/RLinf-Pi05-LIBERO-SFT
-    num_action_chunks: 5 #5
+    num_action_chunks: 10 #5
+    # num_steps: 3 # in pi0.5 config for dsrl
     add_value_head: False
     add_q_head: True
     q_head_type: "default"
