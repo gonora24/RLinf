@@ -33,19 +33,20 @@ RLinf is a flexible and scalable open-source RL infrastructure designed for Embo
 
 ### 1. Clone Git Repo
 
-``` git clone git@github.com:gonora24/RLinf.git
+```bash git clone git@github.com:gonora24/RLinf.git
 cd RLinf
 ```
+-> use dsrl branch
 
 ### 2. Install Virtual Environment
 
-```bash requirements/install.sh embodied --model openpi --env maniskill_libero --venv openpi-venv --no-root 
+```bash bash requirements/install.sh embodied --model openpi --env maniskill_libero --venv openpi-venv --no-root 
 source openpi-venv/bin/activate 
 ```
 
 ### 3. Download Models
 
-```# Download the Spatial-Object-Goal model (choose either method)
+``` # Download the Spatial-Object-Goal model (choose either method)
 # Method 1: Using git clone
 git lfs install
 git clone https://huggingface.co/RLinf/RLinf-Pi0-LIBERO-Spatial-Object-Goal-SFT
