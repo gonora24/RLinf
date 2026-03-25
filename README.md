@@ -33,14 +33,16 @@ RLinf is a flexible and scalable open-source RL infrastructure designed for Embo
 
 ### 1. Clone Git Repo
 
-```bash git clone git@github.com:gonora24/RLinf.git
+```
+git clone git@github.com:gonora24/RLinf.git
 cd RLinf
 ```
 -> use dsrl branch
 
 ### 2. Install Virtual Environment
 
-```bash bash requirements/install.sh embodied --model openpi --env maniskill_libero --venv openpi-venv --no-root 
+``` 
+bash requirements/install.sh embodied --model openpi --env maniskill_libero --venv openpi-venv --no-root 
 source openpi-venv/bin/activate 
 ```
 
