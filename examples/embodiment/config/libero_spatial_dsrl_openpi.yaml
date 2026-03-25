@@ -22,18 +22,18 @@ runner:
   logger:
     log_path: "../results"
     project_name: rlinf
-    experiment_name: "libero_spatial_dsrl_openpi_eval"
+    experiment_name: "libero_spatial_task3_dsrl_openpi"
     logger_backends: ["wandb"]
 
   max_epochs: 20000
   max_steps: -1
 
-  only_eval: True
-  val_check_interval: 10
-  save_interval: 30
+  only_eval: False
+  val_check_interval: -1
+  save_interval: 40
 
   resume_dir: null #"/pfs/work9/workspace/scratch/ka_eu3660-rlinf_tmp/logs/20260309-07:20:10-libero_spatial_dsrl_openpi/libero_spatial_dsrl_openpi/checkpoints/global_step_40"
-  ckpt_path: "/pfs/work9/workspace/scratch/ka_eu3660-rlinf_tmp/logs/20260309-07:20:10-libero_spatial_dsrl_openpi/libero_spatial_dsrl_openpi/checkpoints/global_step_40/actor/model_state_dict/full_weights.pt"
+  ckpt_path: null #"/pfs/work9/workspace/scratch/ka_eu3660-rlinf_tmp/logs/20260309-07:20:10-libero_spatial_dsrl_openpi/libero_spatial_dsrl_openpi/checkpoints/global_step_40/actor/model_state_dict/full_weights.pt"
 
 algorithm:
   normalize_advantages: False
@@ -105,25 +105,27 @@ env:
   enable_offload: False
 
   train:
+    task_id: 3
     total_num_envs: 16
     auto_reset: False
     use_rel_reward: False
     use_step_penalty: True
     max_episode_steps: 240
     max_steps_per_rollout_epoch: 240
-    specific_reset_id: 0
+    specific_reset_id: null
     use_ordered_reset_state_ids: True
   eval:
+    task_id: 3
     total_num_envs: 25 #500
-    auto_reset: True
+    auto_reset: False
     use_rel_reward: False
     use_step_penalty: True
-    ignore_terminations: True
+    ignore_terminations: False
     max_episode_steps: 240
     max_steps_per_rollout_epoch: 240
     is_eval: True
     group_size: 1
-    specific_reset_id: 0
+    specific_reset_id: null
     use_ordered_reset_state_ids: True
     video_cfg:
       save_video: True
@@ -169,6 +171,7 @@ actor:
       train_expert_only: True
       detach_critic_input: True
       noise_method: "reinflow"
+      use_action_chunking: False
 
   optim:
     lr: 1.0e-4

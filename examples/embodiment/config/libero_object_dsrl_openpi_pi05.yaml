@@ -1,6 +1,6 @@
 defaults:
-  - env/libero_90@env.train
-  - env/libero_90@env.eval
+  - env/libero_object@env.train
+  - env/libero_object@env.eval
   - model/pi0_5@actor.model
   - training_backend/fsdp@actor.fsdp_config
   - override hydra/job_logging: stdout
@@ -22,15 +22,15 @@ runner:
   logger:
     log_path: "../results"
     project_name: rlinf
-    experiment_name: "libero_90_task50_pi05_eval"
+    experiment_name: "libero_object_task0_dsrl_openpi_pi05"
     logger_backends: ["wandb"]
 
   max_epochs: 20000
-  max_steps: -1 # Set to a large number for unlimited training
+  max_steps: -1
 
-  only_eval: True
-  val_check_interval: 10
-  save_interval: 20
+  only_eval: False
+  val_check_interval: -1
+  save_interval: 40
 
   resume_dir: null
   ckpt_path: null
@@ -42,7 +42,7 @@ algorithm:
   reward_coef: 1.0
 
   rollout_epoch: 1
-  eval_rollout_epoch: 2 #2
+  eval_rollout_epoch: 1
 
   reward_type: chunk_level
   logprob_type: chunk_level
@@ -76,7 +76,7 @@ algorithm:
     enable_cache: True
     cache_size: 200 #15000
     sample_window_size: 200 #15000
-    min_buffer_size: 10 #10
+    min_buffer_size: 10
     auto_save: False
 
   target_update_freq: 1
@@ -105,27 +105,27 @@ env:
   enable_offload: False
 
   train:
-    task_id: 40
+    task_id: 0
     total_num_envs: 16
     auto_reset: False
     use_rel_reward: False
     use_step_penalty: True
     max_episode_steps: 240
     max_steps_per_rollout_epoch: 240
-    specific_reset_id: null
+    specific_reset_id: 0
     use_ordered_reset_state_ids: True
   eval:
-    task_id: 40
-    total_num_envs: 16 #16 with eval rollout epoch essentially lowered for faster training
-    auto_reset: True
+    task_id: 0
+    total_num_envs: 500
+    auto_reset: False
     use_rel_reward: False
     use_step_penalty: True
-    ignore_terminations: True
+    ignore_terminations: False
     max_episode_steps: 240
     max_steps_per_rollout_epoch: 240
     is_eval: True
     group_size: 1
-    specific_reset_id: null
+    specific_reset_id: 0
     use_ordered_reset_state_ids: True
     video_cfg:
       save_video: True
@@ -135,14 +135,14 @@ rollout:
   group_name: "RolloutGroup"
   generation_backend: "huggingface"
   recompute_logprobs: False
-  unnorm_key: libero_90
+  unnorm_key: libero_10
   enable_offload: False
   pipeline_stage_num: 1
   collect_transitions: True
   collect_prev_infos: False
 
   model:
-    model_path: "./RLinf-Pi05-LIBERO-SFT" # https://huggingface.co/RLinf/RLinf-Pi05-LIBERO-SFT
+    model_path: "./RLinf-Pi05-LIBERO-SFT"
     precision: ${actor.model.precision}
 
 actor:
@@ -154,8 +154,9 @@ actor:
   enable_offload: False
 
   model:
-    model_path: "./RLinf-Pi05-LIBERO-SFT" # https://huggingface.co/RLinf/RLinf-Pi05-LIBERO-SFT
-    num_action_chunks: 10 #5
+    model_path: "./RLinf-Pi05-LIBERO-SFT"
+    num_action_chunks: 5
+    num_steps: 3
     add_value_head: False
     add_q_head: True
     q_head_type: "default"
@@ -179,7 +180,6 @@ actor:
     adam_beta2: 0.96
     adam_eps: 1.0e-08
     clip_grad: 3.5
-    
 
   critic_optim:
     lr: 3.0e-4

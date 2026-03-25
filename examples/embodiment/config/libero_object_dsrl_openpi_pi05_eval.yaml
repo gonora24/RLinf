@@ -1,6 +1,6 @@
 defaults:
-  - env/libero_90@env.train
-  - env/libero_90@env.eval
+  - env/libero_object@env.train
+  - env/libero_object@env.eval
   - model/pi0_5@actor.model
   - training_backend/fsdp@actor.fsdp_config
   - override hydra/job_logging: stdout
@@ -22,14 +22,14 @@ runner:
   logger:
     log_path: "../results"
     project_name: rlinf
-    experiment_name: "libero_90_task50_pi05_eval"
+    experiment_name: "libero_object_dsrl_openpi_pi05_eval"
     logger_backends: ["wandb"]
 
   max_epochs: 20000
   max_steps: -1 # Set to a large number for unlimited training
 
   only_eval: True
-  val_check_interval: 10
+  val_check_interval: -1
   save_interval: 20
 
   resume_dir: null
@@ -42,7 +42,7 @@ algorithm:
   reward_coef: 1.0
 
   rollout_epoch: 1
-  eval_rollout_epoch: 2 #2
+  eval_rollout_epoch: 5 #2
 
   reward_type: chunk_level
   logprob_type: chunk_level
@@ -105,7 +105,7 @@ env:
   enable_offload: False
 
   train:
-    task_id: 40
+    task_id: 0
     total_num_envs: 16
     auto_reset: False
     use_rel_reward: False
@@ -115,12 +115,12 @@ env:
     specific_reset_id: null
     use_ordered_reset_state_ids: True
   eval:
-    task_id: 40
+    task_id: 0
     total_num_envs: 16 #16 with eval rollout epoch essentially lowered for faster training
-    auto_reset: True
+    auto_reset: False
     use_rel_reward: False
     use_step_penalty: True
-    ignore_terminations: True
+    ignore_terminations: False
     max_episode_steps: 240
     max_steps_per_rollout_epoch: 240
     is_eval: True
@@ -135,7 +135,7 @@ rollout:
   group_name: "RolloutGroup"
   generation_backend: "huggingface"
   recompute_logprobs: False
-  unnorm_key: libero_90
+  unnorm_key: libero_10
   enable_offload: False
   pipeline_stage_num: 1
   collect_transitions: True
@@ -156,6 +156,7 @@ actor:
   model:
     model_path: "./RLinf-Pi05-LIBERO-SFT" # https://huggingface.co/RLinf/RLinf-Pi05-LIBERO-SFT
     num_action_chunks: 10 #5
+    # num_steps: 3 # in pi0.5 config for dsrl
     add_value_head: False
     add_q_head: True
     q_head_type: "default"
