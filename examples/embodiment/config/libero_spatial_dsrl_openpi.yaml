@@ -73,9 +73,9 @@ algorithm:
       clip_grad: 10.0
 
   replay_buffer:
-    enable_cache: True
-    cache_size: 200 #15000
-    sample_window_size: 200 #15000
+    enable_cache: True #True
+    cache_size: 2000 #15000
+    sample_window_size: 2000
     min_buffer_size: 10
     auto_save: False
 
@@ -148,7 +148,7 @@ rollout:
 actor:
   group_name: "ActorGroup"
   training_backend: "fsdp"
-  micro_batch_size: 64
+  micro_batch_size: 512 # same as global batch size to skip for loop
   global_batch_size: 512
   seed: 42
   enable_offload: False

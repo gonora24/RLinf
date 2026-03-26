@@ -74,14 +74,14 @@ algorithm:
 
   replay_buffer:
     enable_cache: True
-    cache_size: 200 #15000
-    sample_window_size: 200 #15000
-    min_buffer_size: 10
+    cache_size: 2000 #15000
+    sample_window_size: 2000 #15000
+    min_buffer_size: 1 #10
     auto_save: False
 
   target_update_freq: 1
   target_update_type: all
-  train_actor_steps: 10
+  train_actor_steps: 1 #10
 
   filter_rewards: False
   rewards_lower_bound: 0.1

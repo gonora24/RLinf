@@ -74,8 +74,8 @@ algorithm:
 
   replay_buffer:
     enable_cache: True
-    cache_size: 200 #15000
-    sample_window_size: 200 #15000
+    cache_size: 2000 #15000
+    sample_window_size: 2000 #15000
     min_buffer_size: 10 # should match train_actor_steps, otherwise critic warm up
     auto_save: False
 
@@ -148,7 +148,7 @@ rollout:
 actor:
   group_name: "ActorGroup"
   training_backend: "fsdp"
-  micro_batch_size: 64
+  micro_batch_size: 512 #64
   global_batch_size: 512
   seed: 42
   enable_offload: False

@@ -22,17 +22,17 @@ runner:
   logger:
     log_path: "../results"
     project_name: rlinf
-    experiment_name: "libero_90_dsrl_task50_pi05"
+    experiment_name: "libero_90_dsrl_task50trial1_pi05"
     logger_backends: ["wandb"]
 
   max_epochs: 20000
-  max_steps: 200000 # Set to a large number for unlimited training
+  max_steps: -1 # Set to a large number for unlimited training
 
   only_eval: False
   val_check_interval: -1
   save_interval: 20
 
-  resume_dir: "/pfs/work9/workspace/scratch/ka_eu3660-rlinf_tmp/logs/20260325-08:59:26-libero_90_dsrl_openpi_pi05/libero_90_dsrl_task50_pi05/checkpoints/global_step_20"
+  resume_dir: null #"/pfs/work9/workspace/scratch/ka_eu3660-rlinf_tmp/logs/20260325-08:59:26-libero_90_dsrl_openpi_pi05/libero_90_dsrl_task50_pi05/checkpoints/global_step_20"
   ckpt_path: null
 
 algorithm:
@@ -74,8 +74,8 @@ algorithm:
 
   replay_buffer:
     enable_cache: True
-    cache_size: 200 #15000
-    sample_window_size: 200 #15000
+    cache_size: 2000 #15000
+    sample_window_size: 2000 #15000
     min_buffer_size: 10 #10
     auto_save: False
 
@@ -105,17 +105,17 @@ env:
   enable_offload: False
 
   train:
-    task_id: 50
+    # task_id: 50
     total_num_envs: 16
     auto_reset: False
     use_rel_reward: False
     use_step_penalty: True
     max_episode_steps: 320 #240
     max_steps_per_rollout_epoch: 320 #240
-    specific_reset_id: null
+    specific_reset_id: 2851
     use_ordered_reset_state_ids: True
   eval:
-    task_id: 50
+    # task_id: 50
     total_num_envs: 4 #16 with eval rollout epoch essentially lowered for faster training
     auto_reset: True
     use_rel_reward: False
@@ -125,7 +125,7 @@ env:
     max_steps_per_rollout_epoch: 320 #240
     is_eval: True
     group_size: 1
-    specific_reset_id: null
+    specific_reset_id: 2851
     use_ordered_reset_state_ids: True
     video_cfg:
       save_video: True
@@ -148,7 +148,7 @@ rollout:
 actor:
   group_name: "ActorGroup"
   training_backend: "fsdp"
-  micro_batch_size: 64
+  micro_batch_size: 512 #64
   global_batch_size: 512
   seed: 42
   enable_offload: False
