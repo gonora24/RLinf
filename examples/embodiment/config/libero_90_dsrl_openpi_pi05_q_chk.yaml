@@ -74,8 +74,8 @@ algorithm:
 
   replay_buffer:
     enable_cache: True
-    cache_size: 2000 #15000
-    sample_window_size: 2000 #15000
+    cache_size: 5000 #15000
+    sample_window_size: 5000 #15000
     min_buffer_size: 10 # should match train_actor_steps, otherwise critic warm up
     auto_save: False
 

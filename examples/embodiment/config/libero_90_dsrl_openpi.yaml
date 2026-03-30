@@ -29,7 +29,7 @@ runner:
   max_steps: -1
 
   only_eval: False
-  val_check_interval: 10
+  val_check_interval: -1
   save_interval: 40
 
   resume_dir: null
@@ -74,14 +74,14 @@ algorithm:
 
   replay_buffer:
     enable_cache: True
-    cache_size: 200 #15000
-    sample_window_size: 200 #15000
-    min_buffer_size: 2 #10
+    cache_size: 2000 #15000
+    sample_window_size: 2000 #15000
+    min_buffer_size: 10 #10
     auto_save: False
 
   target_update_freq: 1
   target_update_type: all
-  train_actor_steps: 1 #10
+  train_actor_steps: 10 #10
 
   filter_rewards: False
   rewards_lower_bound: 0.1
@@ -105,17 +105,17 @@ env:
   enable_offload: False
 
   train:
-    task_id: 57
+    task_id: 58
     total_num_envs: 16
     auto_reset: False
     use_rel_reward: False
     use_step_penalty: True
     max_episode_steps: 240
     max_steps_per_rollout_epoch: 240
-    specific_reset_id: null
+    specific_reset_id: 0
     use_ordered_reset_state_ids: True
   eval:
-    task_id: 57
+    task_id: 58
     total_num_envs: 16
     auto_reset: True
     use_rel_reward: False
@@ -125,7 +125,7 @@ env:
     max_steps_per_rollout_epoch: 240
     is_eval: True
     group_size: 1
-    specific_reset_id: null
+    specific_reset_id: 0
     use_ordered_reset_state_ids: True
     video_cfg:
       save_video: True
@@ -148,7 +148,7 @@ rollout:
 actor:
   group_name: "ActorGroup"
   training_backend: "fsdp"
-  micro_batch_size: 64
+  micro_batch_size: 512
   global_batch_size: 512
   seed: 42
   enable_offload: False
@@ -172,6 +172,7 @@ actor:
       detach_critic_input: True
       noise_method: "reinflow"
       use_action_chunking: False
+      action_magnitude: 1.0
 
   optim:
     lr: 1.0e-4

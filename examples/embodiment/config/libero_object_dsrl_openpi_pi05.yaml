@@ -30,9 +30,9 @@ runner:
 
   only_eval: False
   val_check_interval: -1
-  save_interval: 40
+  save_interval: 20
 
-  resume_dir: null
+  resume_dir: null #"/pfs/work9/workspace/scratch/ka_eu3660-rlinf_tmp/logs/20260328-03:34:44-libero_object_dsrl_openpi_pi05/libero_object_task0_dsrl_openpi_pi05/checkpoints/global_step_120"
   ckpt_path: null
 
 algorithm:
@@ -155,8 +155,8 @@ actor:
 
   model:
     model_path: "./RLinf-Pi05-LIBERO-SFT"
-    num_action_chunks: 5
-    num_steps: 3
+    num_action_chunks: 10
+    num_steps: 5
     add_value_head: False
     add_q_head: True
     q_head_type: "default"
@@ -173,6 +173,7 @@ actor:
       detach_critic_input: True
       noise_method: "reinflow"
       use_action_chunking: False
+      action_magnitude: 1.5
 
   optim:
     lr: 1.0e-4
