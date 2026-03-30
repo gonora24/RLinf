@@ -78,6 +78,7 @@ class OpenPi0Config(Pi0Config):
         default_factory=lambda: (128, 128, 128)
     )  # Hidden dims for Q-head and GaussianPolicy
     use_action_chunking: bool = False  # use action chunking for DSRL
+    action_magnitude: float = 1.0  # action magnitude for DSRL
 
 
 class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
@@ -199,8 +200,8 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
                 input_dim=dsrl_input_dim,
                 output_dim=output_dim,
                 hidden_dims=self.config.dsrl_hidden_dims,
-                low=None,
-                high=None,
+                low=-self.config.action_magnitude,
+                high=self.config.action_magnitude,
                 action_horizon=self.config.action_horizon,
             ).to(dtype=_dsrl_dtype)
 

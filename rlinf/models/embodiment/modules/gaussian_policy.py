@@ -185,13 +185,15 @@ class GaussianPolicy(nn.Module):
 
     def _init_weights(self, log_std_init):
         # Mean layer: small random init (matches dsrl_pi0's default_init(1e-2))
-        nn.init.xavier_uniform_(self.mean_layer.weight, gain=0.01)
+        # nn.init.xavier_uniform_(self.mean_layer.weight, gain=0.01)
+        nn.init.orthogonal_(self.mean_layer.weight, gain=0.01)
         nn.init.zeros_(self.mean_layer.bias)
 
         # log_std layer: small random init (matches dsrl_pi0).
         # dsrl_pi0 uses kernel_init=default_init(1e-2), so log_std starts near 0
         # (rather than being fixed to a specific value).
-        nn.init.xavier_uniform_(self.log_std_layer.weight, gain=0.01)
+        # nn.init.xavier_uniform_(self.log_std_layer.weight, gain=0.01)
+        nn.init.orthogonal_(self.log_std_layer.weight, gain=0.01)
         # Bias initialized to 0 so log_std starts at 0 (std = exp(0) = 1.0)
         nn.init.zeros_(self.log_std_layer.bias)
 
@@ -277,7 +279,7 @@ class GaussianPolicy(nn.Module):
                 action = y_t * scale_factor + shift
                 # Subtract log(scale_factor) from log_prob
                 log_prob -= torch.sum(
-                    torch.log(torch.abs(scale_factor) * torch.ones_like(y_t)), dim=-1
+                    torch.log(abs(scale_factor) * torch.ones_like(y_t)), dim=-1
                 )
             else:
                 action = y_t

@@ -207,7 +207,7 @@ class CompactStateEncoder(nn.Module):
     def __init__(self, state_dim=32, hidden_dim=64):
         super().__init__()
         self.encoder = nn.Sequential(
-            nn.Linear(state_dim, hidden_dim), nn.LayerNorm(hidden_dim), nn.Tanh()
+            nn.Linear(state_dim, hidden_dim), nn.LayerNorm(hidden_dim), nn.ReLU()
         )
 
     def forward(self, state):
@@ -283,14 +283,16 @@ class CompactQHead(nn.Module):
             if isinstance(m, nn.Linear):
                 if i == len(self.net) - 1:  # Output layer
                     # Small init: std=0.01 so Q-values start near 0
-                    nn.init.normal_(m.weight, mean=0.0, std=0.01)
+                    # nn.init.normal_(m.weight, mean=0.0, std=0.01)
+                    nn.init.orthogonal_(m.weight, gain=1.0)
                     if m.bias is not None:
                         nn.init.zeros_(m.bias)
                 else:  # Hidden layers
                     # Kaiming Normal for ReLU activations
-                    nn.init.kaiming_normal_(
-                        m.weight, mode="fan_out", nonlinearity="relu"
-                    )
+                    # nn.init.kaiming_normal_(
+                    #     m.weight, mode="fan_out", nonlinearity="relu"
+                    # )
+                    nn.init.orthogonal_(m.weight, gain=1.0)
                     if m.bias is not None:
                         nn.init.zeros_(m.bias)
 
