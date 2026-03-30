@@ -321,6 +321,10 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
             if use_action_chunking:
                 self.action_horizon = batch["actions"].shape[1]
                 batch_dim = batch["actions"].shape[0]
+                # Create mask: True until first termination, then False
+                mask = (~batch["terminations"]).cumprod(dim=1).bool()
+                # Apply mask
+                batch["rewards"] = batch["rewards"] * mask
                 exponents = torch.arange(0, self.action_horizon).float() # [0, 1, 2, ..., H-1]
                 gamma_powers = torch.pow(self.cfg.algorithm.gamma, exponents) #[gamma^0, gamma^1, ..., gamma^H-1], Shape: (H,)
                 gamma_powers = gamma_powers.unsqueeze(0).expand(batch_dim, -1).to(self.device) # Shape: (B, H)
@@ -444,7 +448,7 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
         critic_loss = F.mse_loss(
             all_data_q_values, target_q_values.expand_as(all_data_q_values)
         )
-        return critic_loss, {"q_data": all_data_q_values.mean().item()}
+        return critic_loss, {"q_data": all_data_q_values.mean().item(), "target_q_values": target_q_values.mean().item()}
 
     @Worker.timer("forward_actor")
     def forward_actor(self, batch):
