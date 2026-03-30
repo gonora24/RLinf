@@ -813,11 +813,27 @@ class TrajectoryReplayBuffer:
         buffer_indices: torch.Tensor,
         batch_indices: torch.Tensor,
     ) -> None:
+        # Sort by buffer index so memory reads are sequential (CPU cache friendly).
+        sorted_order = buffer_indices.argsort()
+        buffer_indices = buffer_indices[sorted_order]
+        batch_indices = batch_indices[sorted_order]
+
+        self._fill_batch_from_buffer_indices_sorted(
+            batch, buffer, buffer_indices, batch_indices
+        )
+
+    def _fill_batch_from_buffer_indices_sorted(
+        self,
+        batch: dict,
+        buffer: dict,
+        buffer_indices: torch.Tensor,
+        batch_indices: torch.Tensor,
+    ) -> None:
         for key, value in buffer.items():
             if isinstance(value, torch.Tensor):
                 batch[key][batch_indices] = value.index_select(0, buffer_indices)
             elif isinstance(value, dict):
-                self._fill_batch_from_buffer_indices(
+                self._fill_batch_from_buffer_indices_sorted(
                     batch[key], value, buffer_indices, batch_indices
                 )
 
