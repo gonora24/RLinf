@@ -170,7 +170,7 @@ class GaussianPolicy(nn.Module):
         in_dim = input_dim
         for out_dim in hidden_dims:
             layers.extend(
-                [nn.Linear(in_dim, out_dim), nn.LayerNorm(out_dim), nn.ReLU()]
+                [nn.Linear(in_dim, out_dim), nn.ReLU()] # no layer norm in dsrl_pi0 nn.LayerNorm(out_dim)
             )
             in_dim = out_dim
 
@@ -184,6 +184,12 @@ class GaussianPolicy(nn.Module):
         self._init_weights(log_std_init)
 
     def _init_weights(self, log_std_init):
+        for m in self.shared_net:
+            if isinstance(m, nn.Linear):
+                nn.init.orthogonal_(m.weight, gain=1.0)
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+
         # Mean layer: small random init (matches dsrl_pi0's default_init(1e-2))
         # nn.init.xavier_uniform_(self.mean_layer.weight, gain=0.01)
         nn.init.orthogonal_(self.mean_layer.weight, gain=0.01)

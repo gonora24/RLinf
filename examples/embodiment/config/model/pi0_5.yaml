@@ -32,3 +32,6 @@ openpi:
   value_after_vlm: False
   value_vlm_mode: "mean_token"
   detach_critic_input: null
+  use_action_chunking: False
+  action_magnitude: 1.0
+  use_state_encoder: True

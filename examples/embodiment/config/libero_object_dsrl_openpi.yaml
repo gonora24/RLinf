@@ -22,7 +22,7 @@ runner:
   logger:
     log_path: "../results"
     project_name: rlinf
-    experiment_name: "libero_object_task4_dsrl_openpi"
+    experiment_name: "libero_object_task6_dsrl_openpi"
     logger_backends: ["wandb"]
 
   max_epochs: 20000
@@ -74,8 +74,8 @@ algorithm:
 
   replay_buffer:
     enable_cache: True
-    cache_size: 200 #15000
-    sample_window_size: 200 #15000
+    cache_size: 5000 #15000
+    sample_window_size: 5000 #15000
     min_buffer_size: 10
     auto_save: False
 
@@ -105,7 +105,7 @@ env:
   enable_offload: False
 
   train:
-    task_id: 4
+    task_id: 6
     total_num_envs: 16
     auto_reset: False
     use_rel_reward: False
@@ -115,7 +115,7 @@ env:
     specific_reset_id: null
     use_ordered_reset_state_ids: True
   eval:
-    task_id: 4
+    task_id: 6
     total_num_envs: 25 #500
     auto_reset: False
     use_rel_reward: False
@@ -165,13 +165,15 @@ actor:
       dsrl_state_dim: 8
       dsrl_action_noise_dim: 32
       dsrl_num_q_heads: 10
-      dsrl_image_latent_dim: 64
-      dsrl_state_latent_dim: 64
+      dsrl_image_latent_dim: 50 # 64
+      dsrl_state_latent_dim: 50 # 64
       dsrl_hidden_dims: [128, 128, 128]
       train_expert_only: True
       detach_critic_input: True
       noise_method: "reinflow"
       use_action_chunking: False
+      action_magnitude: 1.0
+      use_state_encoder: False
 
   optim:
     lr: 1.0e-4

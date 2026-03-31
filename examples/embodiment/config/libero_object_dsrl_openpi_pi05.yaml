@@ -30,7 +30,7 @@ runner:
 
   only_eval: False
   val_check_interval: -1
-  save_interval: 20
+  save_interval: 40
 
   resume_dir: null #"/pfs/work9/workspace/scratch/ka_eu3660-rlinf_tmp/logs/20260328-03:34:44-libero_object_dsrl_openpi_pi05/libero_object_task0_dsrl_openpi_pi05/checkpoints/global_step_120"
   ckpt_path: null
@@ -174,6 +174,7 @@ actor:
       noise_method: "reinflow"
       use_action_chunking: False
       action_magnitude: 1.5
+      use_state_encoder: True
 
   optim:
     lr: 1.0e-4

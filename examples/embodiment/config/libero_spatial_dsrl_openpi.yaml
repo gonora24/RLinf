@@ -30,7 +30,7 @@ runner:
 
   only_eval: False
   val_check_interval: -1
-  save_interval: 20
+  save_interval: 40
 
   resume_dir: null #"/pfs/work9/workspace/scratch/ka_eu3660-rlinf_tmp/logs/20260309-07:20:10-libero_spatial_dsrl_openpi/libero_spatial_dsrl_openpi/checkpoints/global_step_40"
   ckpt_path: null #"/pfs/work9/workspace/scratch/ka_eu3660-rlinf_tmp/logs/20260309-07:20:10-libero_spatial_dsrl_openpi/libero_spatial_dsrl_openpi/checkpoints/global_step_40/actor/model_state_dict/full_weights.pt"
@@ -172,6 +172,7 @@ actor:
       detach_critic_input: True
       noise_method: "reinflow"
       use_action_chunking: False
+      action_magnitude: 1.0
 
   optim:
     lr: 1.0e-4

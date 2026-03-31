@@ -79,6 +79,7 @@ class OpenPi0Config(Pi0Config):
     )  # Hidden dims for Q-head and GaussianPolicy
     use_action_chunking: bool = False  # use action chunking for DSRL
     action_magnitude: float = 1.0  # action magnitude for DSRL
+    use_state_encoder: bool = False  # use state encoder for DSRL
 
 
 class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
@@ -189,9 +190,11 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
             # its FlatParameter, avoiding the writeback shape-mismatch error.
             _dsrl_dtype = torch.bfloat16
 
-            dsrl_input_dim = (
-                self.config.dsrl_state_latent_dim + self.config.dsrl_image_latent_dim
-            )  # e.g. 64 + 64 = 128
+            if self.config.use_state_encoder:
+                dsrl_input_dim = self.config.dsrl_image_latent_dim + self.config.dsrl_state_latent_dim # e.g. 64 + 64 = 128
+            else:
+                dsrl_input_dim = self.config.dsrl_state_dim + self.config.dsrl_image_latent_dim # e.g. 8 + 64 = 72
+                
             if self.config.use_action_chunking:
                 output_dim = self.config.dsrl_action_noise_dim * self.config.action_horizon #from pi train config
             else:
@@ -210,25 +213,35 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
                 latent_dim=self.config.dsrl_image_latent_dim,
                 image_size=64,
             ).to(dtype=_dsrl_dtype)
-            self.actor_state_encoder = CompactStateEncoder(
-                state_dim=self.config.dsrl_state_dim,
-                hidden_dim=self.config.dsrl_state_latent_dim,
-            ).to(dtype=_dsrl_dtype)
+
+            if self.config.use_state_encoder:
+                self.actor_state_encoder = CompactStateEncoder(
+                    state_dim=self.config.dsrl_state_dim,
+                    hidden_dim=self.config.dsrl_state_latent_dim,
+                ).to(dtype=_dsrl_dtype)
             self.critic_image_encoder = LightweightImageEncoder64(
                 num_images=1,
                 latent_dim=self.config.dsrl_image_latent_dim,
                 image_size=64,
             ).to(dtype=_dsrl_dtype)
-            self.critic_state_encoder = CompactStateEncoder(
-                state_dim=self.config.dsrl_state_dim,
-                hidden_dim=self.config.dsrl_state_latent_dim,
-            ).to(dtype=_dsrl_dtype)
+
+            if self.config.use_state_encoder:
+                self.critic_state_encoder = CompactStateEncoder(
+                    state_dim=self.config.dsrl_state_dim,
+                    hidden_dim=self.config.dsrl_state_latent_dim,
+                ).to(dtype=_dsrl_dtype)
+
             if self.config.use_action_chunking:
                 action_dim = self.config.dsrl_action_noise_dim * self.config.action_horizon
             else:
                 action_dim = self.config.dsrl_action_noise_dim
+
+            if self.config.use_state_encoder:
+                state_dim = self.config.dsrl_state_latent_dim
+            else:
+                state_dim = self.config.dsrl_state_dim
             self.q_head = CompactMultiQHead(
-                state_dim=self.config.dsrl_state_latent_dim,
+                state_dim=state_dim,
                 image_dim=self.config.dsrl_image_latent_dim,
                 action_dim=action_dim,
                 hidden_dims=self.config.dsrl_hidden_dims,
@@ -1023,7 +1036,10 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
 
         # Extract features (using actor's independent encoder)
         image_features = self.actor_image_encoder(images)  # [B, 64]
-        state_features = self.actor_state_encoder(states)  # [B, 64]
+        if self.config.use_state_encoder:
+            state_features = self.actor_state_encoder(states)  # [B, 64]
+        else:
+            state_features = states
         features = torch.cat([state_features, image_features], dim=-1)  # [B, 128]
 
         # Sample from GaussianPolicy
@@ -1100,12 +1116,16 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
 
         # Extract features (using critic's independent encoder)
         image_features = self.critic_image_encoder(images)
-        state_features = self.critic_state_encoder(states)
+        if self.config.use_state_encoder:
+            state_features = self.critic_state_encoder(states)
+        else:
+            state_features = states
 
         # Optionally detach encoder
         if detach_encoder:
             image_features = image_features.detach()
-            state_features = state_features.detach()
+            if self.config.use_state_encoder:
+                state_features = state_features.detach()
 
         # Process actions (DSRL: should be noise, already flattened)
         if actions.dim() == 3 and not self.config.use_action_chunking:

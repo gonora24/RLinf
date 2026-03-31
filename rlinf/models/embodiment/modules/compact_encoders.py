@@ -207,7 +207,7 @@ class CompactStateEncoder(nn.Module):
     def __init__(self, state_dim=32, hidden_dim=64):
         super().__init__()
         self.encoder = nn.Sequential(
-            nn.Linear(state_dim, hidden_dim), nn.LayerNorm(hidden_dim), nn.ReLU()
+            nn.Linear(state_dim, hidden_dim), nn.LayerNorm(hidden_dim), nn.Tanh() # tanh ist hier wichtig
         )
 
     def forward(self, state):
