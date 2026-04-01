@@ -76,7 +76,7 @@ algorithm:
     enable_cache: True
     cache_size: 5000 #15000
     sample_window_size: 5000 #15000
-    min_buffer_size: 10
+    min_buffer_size: 31
     auto_save: False
 
   target_update_freq: 1
@@ -173,7 +173,7 @@ actor:
       detach_critic_input: True
       noise_method: "reinflow"
       use_action_chunking: False
-      action_magnitude: 1.5
+      action_magnitude: 1.0
       use_state_encoder: True
 
   optim:
