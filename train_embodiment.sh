@@ -29,4 +29,4 @@ module load devel/cuda
 
 source openpi-venv/bin/activate
 
-bash examples/embodiment/run_embodiment.sh libero_object_dsrl_openpi_pi05
+bash examples/embodiment/run_embodiment.sh libero_object_dsrl_openpi

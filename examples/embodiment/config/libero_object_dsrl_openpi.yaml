@@ -74,14 +74,15 @@ algorithm:
 
   replay_buffer:
     enable_cache: True
-    cache_size: 5000 #15000
-    sample_window_size: 5000 #15000
-    min_buffer_size: 31 #500 in original dsrl code -> wir haben 16 pro rollout -> 31
+    enable_preload: True
+    cache_size: 2000 #15000
+    sample_window_size: 2000 #15000
+    min_buffer_size: 1 #31 #500 in original dsrl code -> wir haben 16 pro rollout -> 31
     auto_save: False
 
   target_update_freq: 1
   target_update_type: all
-  train_actor_steps: 10
+  train_actor_steps: 1
 
   filter_rewards: False
   rewards_lower_bound: 0.1
