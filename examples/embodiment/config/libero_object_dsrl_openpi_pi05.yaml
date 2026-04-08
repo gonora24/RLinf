@@ -26,13 +26,13 @@ runner:
     logger_backends: ["wandb"]
 
   max_epochs: 20000
-  max_steps: -1
+  max_steps: 20000
 
   only_eval: False
   val_check_interval: -1
-  save_interval: 40
+  save_interval: 60 #60
 
-  resume_dir: null #"/pfs/work9/workspace/scratch/ka_eu3660-rlinf_tmp/logs/20260328-03:34:44-libero_object_dsrl_openpi_pi05/libero_object_task0_dsrl_openpi_pi05/checkpoints/global_step_120"
+  resume_dir: "/pfs/work9/workspace/scratch/ka_eu3660-rlinf_tmp/logs/20260404-00:53:32-libero_object_dsrl_openpi_pi05/libero_object_task0_dsrl_openpi_pi05/checkpoints/global_step_80"
   ckpt_path: null
 
 algorithm:
@@ -75,9 +75,9 @@ algorithm:
   replay_buffer:
     enable_cache: True
     enable_preload: True
-    cache_size: 5000 #15000
-    sample_window_size: 5000 #15000
-    min_buffer_size: 31
+    cache_size: 80 #200 #15000
+    sample_window_size: 80 #200 #15000
+    min_buffer_size: 30
     auto_save: False
 
   target_update_freq: 1
@@ -113,11 +113,11 @@ env:
     use_step_penalty: True
     max_episode_steps: 240
     max_steps_per_rollout_epoch: 240
-    specific_reset_id: 0
+    specific_reset_id: null
     use_ordered_reset_state_ids: True
   eval:
     task_id: 0
-    total_num_envs: 500
+    total_num_envs: 16
     auto_reset: False
     use_rel_reward: False
     use_step_penalty: True
@@ -126,7 +126,7 @@ env:
     max_steps_per_rollout_epoch: 240
     is_eval: True
     group_size: 1
-    specific_reset_id: 0
+    specific_reset_id: null
     use_ordered_reset_state_ids: True
     video_cfg:
       save_video: True
@@ -175,7 +175,7 @@ actor:
       noise_method: "reinflow"
       use_action_chunking: False
       action_magnitude: 1.0
-      use_state_encoder: True
+      use_state_encoder: False
 
   optim:
     lr: 1.0e-4

@@ -74,8 +74,9 @@ algorithm:
 
   replay_buffer:
     enable_cache: True
-    cache_size: 5000 #15000
-    sample_window_size: 5000 #15000
+    enable_preload: True
+    cache_size: 2000 #15000
+    sample_window_size: 2000 #15000
     min_buffer_size: 10
     auto_save: False
 

@@ -59,7 +59,15 @@ fi
 echo "Using Python at $(which python)"
 LOG_DIR="${ABS_LOG_DIR}/logs/$(date +'%Y%m%d-%H:%M:%S')-${CONFIG_NAME}" #/$(date +'%Y%m%d-%H:%M:%S')"
 MEGA_LOG_FILE="${LOG_DIR}/run_embodiment.log"
-mkdir -p "${LOG_DIR}"
+RAY_LOG_DIR="${ABS_LOG_DIR}/ray"
+RAY_TMP_LINK="/tmp/rlray-${USER}"
+RAY_SESSION_PATH_FILE="${LOG_DIR}/ray_session_path.txt"
+mkdir -p "${LOG_DIR}" "${RAY_LOG_DIR}"
+ln -sfn "${RAY_LOG_DIR}" "${RAY_TMP_LINK}"
+export RAY_TMPDIR="${RAY_TMPDIR:-${RAY_TMP_LINK}}"
+export RAY_SESSION_PATH_FILE
 CMD="python ${SRC_FILE} --config-path ${EMBODIED_PATH}/config/ --config-name ${CONFIG_NAME} runner.logger.log_path=${LOG_DIR}"
 echo ${CMD} > ${MEGA_LOG_FILE}
+echo "Using RAY_TMPDIR=${RAY_TMPDIR} -> ${RAY_LOG_DIR}" | tee -a ${MEGA_LOG_FILE}
+echo "Ray session path file: ${RAY_SESSION_PATH_FILE}" | tee -a ${MEGA_LOG_FILE}
 ${CMD} 2>&1 | tee -a ${MEGA_LOG_FILE}

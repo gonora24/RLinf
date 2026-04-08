@@ -134,6 +134,33 @@ class Cluster:
         """Check if the cluster has been initialized."""
         return hasattr(cls, "_instance") and cls._instance is not None
 
+    def _record_ray_session_path(self) -> None:
+        """Persist the active Ray session path for the current run if requested."""
+        session_path_file = os.environ.get("RAY_SESSION_PATH_FILE")
+        if not session_path_file:
+            return
+
+        try:
+            from ray._private import worker
+
+            if worker._global_node is None:
+                return
+
+            session_dir = worker._global_node.get_session_dir_path()
+            os.makedirs(os.path.dirname(session_path_file), exist_ok=True)
+            with open(session_path_file, "w", encoding="utf-8") as f:
+                f.write(f"{session_dir}\n")
+
+            session_link = os.path.join(
+                os.path.dirname(session_path_file), "ray_session"
+            )
+            if os.path.lexists(session_link):
+                os.unlink(session_link)
+            os.symlink(session_dir, session_link)
+            self._logger.info("Recorded Ray session path at %s.", session_path_file)
+        except OSError as e:
+            self._logger.warning("Failed to record Ray session path: %s", e)
+
     def __new__(cls, *args, **kwargs):  # noqa D417
         """Create a singleton class that manages the cluster resources for Ray workers."""
         if not hasattr(cls, "_instance"):
@@ -253,10 +280,19 @@ class Cluster:
                 namespace=Cluster.NAMESPACE,
             )
         except ConnectionError:
+            local_ray_init_kwargs = {
+                "logging_level": Cluster.LOGGING_LEVEL,
+                "namespace": Cluster.NAMESPACE,
+            }
+            ray_temp_dir = os.environ.get("RAY_TMPDIR")
+            if ray_temp_dir:
+                os.makedirs(ray_temp_dir, exist_ok=True)
+                local_ray_init_kwargs["_temp_dir"] = ray_temp_dir
+                self._logger.info("Using RAY_TMPDIR=%s for local Ray logs.", ray_temp_dir)
             ray.init(
-                logging_level=Cluster.LOGGING_LEVEL,
-                namespace=Cluster.NAMESPACE,
+                **local_ray_init_kwargs,
             )
+        self._record_ray_session_path()
 
         # Ray log collector
         if distributed_log_dir is not None:
