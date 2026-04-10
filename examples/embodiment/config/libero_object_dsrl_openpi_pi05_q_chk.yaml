@@ -30,7 +30,7 @@ runner:
 
   only_eval: False
   val_check_interval: -1
-  save_interval: 40
+  save_interval: 60
 
   resume_dir: null #"/pfs/work9/workspace/scratch/ka_eu3660-rlinf_tmp/logs/20260327-19:10:38-libero_object_dsrl_openpi_pi05_q_chk/libero_object_task0_dsrl_openpi_pi05/checkpoints/global_step_160"
   ckpt_path: null
@@ -66,7 +66,7 @@ algorithm:
   entropy_tuning:
     alpha_type: softplus
     initial_alpha: 1.0
-    target_entropy: -16
+    target_entropy: -160
     optim:
       lr: 3.0e-4
       lr_scheduler: torch_constant
@@ -74,8 +74,8 @@ algorithm:
 
   replay_buffer:
     enable_cache: True
-    cache_size: 200 #15000
-    sample_window_size: 200 #15000
+    cache_size: 80 #15000
+    sample_window_size: 80 #15000
     min_buffer_size: 30 #10
     auto_save: False
 
@@ -112,11 +112,11 @@ env:
     use_step_penalty: True
     max_episode_steps: 240
     max_steps_per_rollout_epoch: 240
-    specific_reset_id: 0
+    specific_reset_id: null
     use_ordered_reset_state_ids: True
   eval:
     task_id: 0
-    total_num_envs: 500
+    total_num_envs: 1 #500
     auto_reset: False
     use_rel_reward: False
     use_step_penalty: True
@@ -125,7 +125,7 @@ env:
     max_steps_per_rollout_epoch: 240
     is_eval: True
     group_size: 1
-    specific_reset_id: 0
+    specific_reset_id: null
     use_ordered_reset_state_ids: True
     video_cfg:
       save_video: True
@@ -173,6 +173,8 @@ actor:
       detach_critic_input: True
       noise_method: "reinflow"
       use_action_chunking: True
+      use_state_encoder: False
+      action_magnitude: 1.0
 
   optim:
     lr: 1.0e-4
