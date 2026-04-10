@@ -200,12 +200,18 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
                 
             if self.config.use_action_chunking:
                 output_dim = self.config.dsrl_action_noise_dim * self.config.action_horizon #from pi train config
+                log_std_min=-10
+                log_std_max=0.5
             else:
                 output_dim = self.config.dsrl_action_noise_dim
+                log_std_min=-20
+                log_std_max=2
             self.dsrl_action_noise_net = GaussianPolicy(
                 input_dim=dsrl_input_dim,
                 output_dim=output_dim,
                 hidden_dims=self.config.dsrl_hidden_dims,
+                log_std_min=log_std_min,
+                log_std_max=log_std_max,
                 low=-self.config.action_magnitude,
                 high=self.config.action_magnitude,
                 action_horizon=self.config.action_horizon,
