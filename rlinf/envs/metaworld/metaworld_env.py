@@ -49,9 +49,12 @@ class MetaWorldEnv(gym.Env):
         self.group_size = self.cfg.group_size
         self.num_group = self.num_envs // self.group_size
         self.use_fixed_reset_state_ids = cfg.use_fixed_reset_state_ids
+        self.specific_reset_id = cfg.get("specific_reset_id", None)
 
         self.ignore_terminations = cfg.ignore_terminations
         self.auto_reset = cfg.auto_reset
+        self.use_rel_reward = cfg.use_rel_reward
+        self.use_step_penalty = getattr(cfg, "use_step_penalty", False)
 
         self._generator = np.random.default_rng(seed=self.seed)
         self._generator_ordered = np.random.default_rng(seed=0)
@@ -152,9 +155,14 @@ class MetaWorldEnv(gym.Env):
         )
 
     def _get_random_reset_state_ids(self, num_reset_states):
-        reset_state_ids = self._generator.integers(
-            low=0, high=self.total_num_group_envs, size=(num_reset_states,)
-        )
+        if self.specific_reset_id is not None:
+            reset_state_ids = self.specific_reset_id * np.ones(
+                (num_reset_states,), dtype=int
+            )
+        else:
+            reset_state_ids = self._generator.integers(
+                low=0, high=self.total_num_group_envs, size=(num_reset_states,)
+            )
         return reset_state_ids
 
     def get_reset_state_ids_all(self):
@@ -432,11 +440,13 @@ class MetaWorldEnv(gym.Env):
         return obs, infos
 
     def _calc_step_reward(self, terminations):
-        reward = self.cfg.reward_coef * terminations
-        reward_diff = reward - self.prev_step_reward
-        self.prev_step_reward = reward
+        step_penalty = -1 if self.use_step_penalty else 0
+        termination_bonus = self.cfg.reward_coef * terminations
+        reward = step_penalty + termination_bonus
 
         if self.use_rel_reward:
+            reward_diff = reward - self.prev_step_reward
+            self.prev_step_reward = reward
             return reward_diff
         else:
             return reward
