@@ -27,6 +27,7 @@ from openpi.models.pi0_config import Pi0Config
 from openpi.models_pytorch.pi0_pytorch import PI0Pytorch, make_att_2d_masks
 
 from rlinf.models.embodiment.base_policy import BasePolicy, ForwardType
+from rlinf.models.embodiment.modules.critic_transformer import SeqQFuncTorch
 from rlinf.models.embodiment.modules.explore_noise_net import ExploreNoiseNet
 from rlinf.models.embodiment.modules.value_head import ValueHead
 from rlinf.utils.logging import get_logger
@@ -78,6 +79,7 @@ class OpenPi0Config(Pi0Config):
         default_factory=lambda: (128, 128, 128)
     )  # Hidden dims for Q-head and GaussianPolicy
     use_action_chunking: bool = False  # use action chunking for DSRL
+    use_transformer_critic: bool = False  # use transformer critic for DSRL
     action_magnitude: float = 1.0  # action magnitude for DSRL
     use_state_encoder: bool = False  # use state encoder for DSRL
 
@@ -200,8 +202,8 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
                 
             if self.config.use_action_chunking:
                 output_dim = self.config.dsrl_action_noise_dim * self.config.action_horizon #from pi train config
-                log_std_min=-10
-                log_std_max=0.5
+                log_std_min=-20
+                log_std_max=2
             else:
                 output_dim = self.config.dsrl_action_noise_dim
                 log_std_min=-20
@@ -239,24 +241,36 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
                     state_dim=self.config.dsrl_state_dim,
                     hidden_dim=self.config.dsrl_state_latent_dim,
                 ).to(dtype=_dsrl_dtype)
-
-            if self.config.use_action_chunking:
-                action_dim = self.config.dsrl_action_noise_dim * self.config.action_horizon
+            if self.config.use_transformer_critic:
+                self.critic = SeqQFuncTorch(
+                    image_dim=self.config.dsrl_image_latent_dim,
+                    state_dim=self.config.dsrl_state_latent_dim,
+                    action_dim=self.config.dsrl_action_noise_dim,
+                    n_embed=self.config.dsrl_hidden_dims[-1],
+                    n_heads=4, # attention heads
+                    n_layer=10,
+                    action_horizon=self.config.action_horizon,
+                    dropout_rate=0.1,
+                    out_dim=1,
+                ).to(dtype=_dsrl_dtype)
             else:
-                action_dim = self.config.dsrl_action_noise_dim
+                if self.config.use_action_chunking:
+                    action_dim = self.config.dsrl_action_noise_dim * self.config.action_horizon
+                else:
+                    action_dim = self.config.dsrl_action_noise_dim
 
-            if self.config.use_state_encoder:
-                state_dim = self.config.dsrl_state_latent_dim
-            else:
-                state_dim = self.config.dsrl_state_dim
-            self.q_head = CompactMultiQHead(
-                state_dim=state_dim,
-                image_dim=self.config.dsrl_image_latent_dim,
-                action_dim=action_dim,
-                hidden_dims=self.config.dsrl_hidden_dims,
-                num_q_heads=self.config.dsrl_num_q_heads,
-                output_dim=1,
-            ).to(dtype=_dsrl_dtype)
+                if self.config.use_state_encoder:
+                    state_dim = self.config.dsrl_state_latent_dim
+                else:
+                    state_dim = self.config.dsrl_state_dim
+                self.q_head = CompactMultiQHead(
+                    state_dim=state_dim,
+                    image_dim=self.config.dsrl_image_latent_dim,
+                    action_dim=action_dim,
+                    hidden_dims=self.config.dsrl_hidden_dims,
+                    num_q_heads=self.config.dsrl_num_q_heads,
+                    output_dim=1,
+                ).to(dtype=_dsrl_dtype)
 
         for name, module in self.named_modules():
             # Set _fsdp_wrap_name to the last part of the path (e.g., "model.action_in_proj" -> "action_in_proj")
@@ -1289,14 +1303,17 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
             if self.config.use_state_encoder:
                 state_features = state_features.detach()
 
-        # Process actions (DSRL: should be noise, already flattened)
-        if actions.dim() == 3 and not self.config.use_action_chunking:
-            actions = actions[:, 0, :]  # [B, action_horizon, dim] -> [B, dim] dim=32
+        if self.config.use_transformer_critic:
+            q_values = self.critic(state_features, image_features, actions)
+            q_values = q_values[:, -1, :] # [B, action_horizon, out_dim] -> [B, out_dim]
         else:
-            actions = actions.flatten(start_dim=1, end_dim=2) # [B, action_horizon, dim] -> [B, action_horizon * dim]
-
-        # Compute Q values
-        q_values = self.q_head(state_features, image_features, actions)
+            # Process actions (DSRL: should be noise, already flattened)
+            if actions.dim() == 3 and not self.config.use_action_chunking:
+                actions = actions[:, 0, :]  # [B, action_horizon, dim] -> [B, dim] dim=32
+            else:
+                actions = actions.flatten(start_dim=1, end_dim=2) # [B, action_horizon, dim] -> [B, action_horizon * dim]
+            # Compute Q values
+            q_values = self.q_head(state_features, image_features, actions)
 
         return q_values
 

@@ -22,14 +22,14 @@ runner:
   logger:
     log_path: "../results"
     project_name: rlinf
-    experiment_name: "metaworld_50_tasktrial0_pi0_q_chk" #"metaworld_50_ppo_openpi_pi05"
+    experiment_name: "metaworld_50_task2trial0_pi0_trafocritic_q_chk" #"metaworld_50_ppo_openpi_pi05"
     logger_backends: ["wandb"] # wandb, swanlab
 
   max_epochs: 10000
   max_steps: -1
 
   only_eval: False # False
-  val_check_interval: -1
+  val_check_interval: 10
   save_interval: 60
 
   resume_dir: null # Optional: path to a saved checkpoint directory, such as 'checkpoints/global_step_10'. If not None, it will be used to resume training.
@@ -42,7 +42,7 @@ algorithm:
   reward_coef: 1.0
 
   rollout_epoch: 1
-  eval_rollout_epoch: 1 # set eval_rollout_epoch > 0 when enable runner.only_eval or runner.val_check_interval > 0
+  eval_rollout_epoch: 2 # set eval_rollout_epoch > 0 when enable runner.only_eval or runner.val_check_interval > 0
 
   reward_type: chunk_level
   logprob_type: chunk_level
@@ -57,7 +57,7 @@ algorithm:
   actor_agg_q: mean
   backup_entropy: False
   critic_subsample_size: 0
-  critic_actor_ratio: 1
+  critic_actor_ratio: 5 #1
 
   bootstrap_type: standard
   gamma: 0.999
@@ -110,8 +110,8 @@ env:
 
   # Override the default values in env/metaworld_50
   train:
-    total_num_envs: 16 #6
-    specific_reset_id: 0
+    total_num_envs: 16
+    specific_reset_id: 20
     auto_reset: False
     use_rel_reward: False
     use_step_penalty: True
@@ -121,13 +121,10 @@ env:
     auto_reset: False
     use_rel_reward: False
     use_step_penalty: True
-    ignore_terminations: False
-    max_episode_steps: 100
-    max_steps_per_rollout_epoch: 100
     is_eval: True
     group_size: 1
-    specific_reset_id: 0
-    use_ordered_reset_state_ids: True
+    specific_reset_id: 20
+    use_ordered_reset_state_ids: False
     video_cfg:
       save_video: True
 
@@ -170,16 +167,17 @@ actor:
       use_dsrl: True
       dsrl_state_dim: 4
       dsrl_action_noise_dim: 32
-      dsrl_num_q_heads: 10
+      dsrl_num_q_heads: 1 #10
       dsrl_image_latent_dim: 64
       dsrl_state_latent_dim: 64
-      dsrl_hidden_dims: [128, 128, 128]
+      dsrl_hidden_dims: [128, 128, 128] #[128, 128, 128]
       train_expert_only: True
       detach_critic_input: True
       noise_method: "reinflow"
       use_action_chunking: True
       action_magnitude: 1.0
-      use_state_encoder: False
+      use_state_encoder: True
+      use_transformer_critic: True # state encoder has to be true for transformer critic
 
   optim:
     lr: 1.0e-4

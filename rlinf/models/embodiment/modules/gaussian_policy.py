@@ -154,6 +154,8 @@ class GaussianPolicy(nn.Module):
         output_dim,
         hidden_dims=(128, 128, 128),  # Match dsrl_pi0
         log_std_init=-2.0,  # Initial log_std (smaller = more concentrated)
+        log_std_min=-20,
+        log_std_max=2,
         low=None,  # Action lower bound
         high=None,  # Action upper bound
         action_horizon=1,
@@ -164,6 +166,8 @@ class GaussianPolicy(nn.Module):
         self.action_horizon = action_horizon
         self.low = low
         self.high = high
+        self.log_std_min = log_std_min
+        self.log_std_max = log_std_max
 
         # Build shared MLP hidden layers
         layers = []
@@ -219,7 +223,7 @@ class GaussianPolicy(nn.Module):
         mean = self.mean_layer(h)
         log_std = self.log_std_layer(h)
         # Clamp log_std range (dsrl_pi0: clip(log_stds, log_std_min, log_std_max))
-        log_std = torch.clamp(log_std, -20, 2)
+        log_std = torch.clamp(log_std, self.log_std_min, self.log_std_max)
 
         # Build distribution (equivalent to dsrl_pi0's TanhMultivariateNormalDiag)
         std = torch.exp(log_std)
@@ -245,7 +249,7 @@ class GaussianPolicy(nn.Module):
         h = self.shared_net(features)
         mean = self.mean_layer(h)
         log_std = self.log_std_layer(h)
-        log_std = torch.clamp(log_std, -20, 2)
+        log_std = torch.clamp(log_std, self.log_std_min, self.log_std_max)
         std = torch.exp(log_std)
 
         if deterministic:

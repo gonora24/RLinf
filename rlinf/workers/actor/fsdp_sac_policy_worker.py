@@ -111,7 +111,7 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
         if use_dsrl:
             # DSRL: separate actor/critic encoders into different optimizer groups
             param_filters = {
-                "critic": ["critic_image_encoder", "critic_state_encoder", "q_head"]
+                "critic": ["critic_image_encoder", "critic_state_encoder", "q_head", "critic"]
             }
         else:
             param_filters = {"critic": ["encoders", "encoder", "q_head", "state_proj"]}
@@ -523,7 +523,7 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
             )
         metrics = {
             f"q_value_{q_id}": all_qf_pi[..., q_id].mean().item()
-            for q_id in range(self.cfg.actor.model.get("num_q_heads", 2))
+            for q_id in range(self.cfg.actor.model.get("num_q_heads", 1))
         }
         if agg_q == "min":
             qf_pi, _ = torch.min(all_qf_pi, dim=1, keepdim=True)
