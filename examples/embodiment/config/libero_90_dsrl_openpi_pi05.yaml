@@ -22,17 +22,17 @@ runner:
   logger:
     log_path: "../results"
     project_name: rlinf
-    experiment_name: "libero_90_dsrl_task50_pi05"
+    experiment_name: "libero_90_dsrl_task57_pi05"
     logger_backends: ["wandb"]
 
   max_epochs: 20000
-  max_steps: 200000 # Set to a large number for unlimited training
+  max_steps: -1 # Set to a large number for unlimited training
 
   only_eval: False
-  val_check_interval: -1
-  save_interval: 60 #40
+  val_check_interval: 20
+  save_interval: 40 #60
 
-  resume_dir: "/pfs/work9/workspace/scratch/ka_eu3660-rlinf_tmp/logs/20260404-06:09:52-libero_90_dsrl_openpi_pi05/libero_90_dsrl_task50_pi05/checkpoints/global_step_120"
+  resume_dir: null #"/pfs/work9/workspace/scratch/ka_eu3660-rlinf_tmp/logs/20260404-06:09:52-libero_90_dsrl_openpi_pi05/libero_90_dsrl_task50_pi05/checkpoints/global_step_120"
   ckpt_path: null
 
 algorithm:
@@ -75,8 +75,8 @@ algorithm:
   replay_buffer:
     enable_cache: True
     enable_preload: True
-    cache_size: 80 #100 #15000
-    sample_window_size: 80 #100 #15000
+    cache_size: 70 #100 #15000
+    sample_window_size: 70 #100 #15000
     min_buffer_size: 30
     auto_save: False
 
@@ -106,7 +106,7 @@ env:
   enable_offload: False
 
   train:
-    task_id: 50
+    task_id: 57
     total_num_envs: 16
     auto_reset: False
     use_rel_reward: False
@@ -116,7 +116,7 @@ env:
     specific_reset_id: null
     use_ordered_reset_state_ids: True
   eval:
-    task_id: 50
+    task_id: 57
     total_num_envs: 4 #16 with eval rollout epoch essentially lowered for faster training
     auto_reset: True
     use_rel_reward: False
