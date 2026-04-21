@@ -3,7 +3,18 @@ import torch.nn as nn
 
 
 class SeqQFuncTorch(nn.Module):
-    def __init__(self, state_dim, image_dim, action_dim, n_embed, n_heads, n_layer, action_horizon, dropout_rate, out_dim=1):
+    def __init__(
+        self,
+        state_dim,
+        image_dim,
+        action_dim,
+        n_embed,
+        n_heads,
+        n_layer,
+        action_horizon,
+        dropout_rate,
+        num_q_heads=1,
+    ):
         super().__init__()
         self.context_proj = nn.Linear(state_dim + image_dim, n_embed, bias=False)
         self.action_embed = nn.Linear(action_dim, n_embed, bias=False)
@@ -18,7 +29,7 @@ class SeqQFuncTorch(nn.Module):
         )
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=n_layer)
         self.norm = nn.LayerNorm(n_embed)
-        self.head = nn.Linear(n_embed, out_dim)
+        self.head = nn.Linear(n_embed, num_q_heads)
 
     def forward(self, state_features, image_features, actions):
         """
@@ -27,7 +38,7 @@ class SeqQFuncTorch(nn.Module):
             image_features:  [B, image_dim]
             actions:         [B, T, action_dim]
         Returns:
-            q_values:        [B, T, out_dim]
+            q_values:        [B, T, num_q_heads]
         """
         B, T, _ = actions.shape
 

@@ -341,6 +341,10 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
 
     @Worker.timer("forward_critic")
     def forward_critic(self, batch):
+        use_intra_chunking = self.cfg.algorithm.get("use_intra_chunking", False)
+        if use_intra_chunking:
+            return self._forward_critic_intra_chunking(batch)
+
         use_crossq = self.cfg.algorithm.get("q_head_type", "default") == "crossq"
         bootstrap_type = self.cfg.algorithm.get("bootstrap_type", "standard")
         agg_q = self.cfg.algorithm.get("agg_q", "min")
@@ -360,6 +364,7 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
                 gamma_powers = torch.pow(self.cfg.algorithm.gamma, exponents) #[gamma^0, gamma^1, ..., gamma^H-1], Shape: (H,)
                 gamma_powers = gamma_powers.unsqueeze(0).expand(batch_dim, -1).to(self.device) # Shape: (B, H)
                 rewards_for_bootstrap = (batch["rewards"] * gamma_powers).sum(dim=-1, keepdim=True).to(self.torch_dtype)
+                # rewards_for_bootstrap = rewards_for_bootstrap / self.action_horizon # normalize
             else:
                 rewards_for_bootstrap = batch["rewards"][:, 0:1].to(self.torch_dtype)
         else:
@@ -480,6 +485,157 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
             all_data_q_values, target_q_values.expand_as(all_data_q_values)
         )
         return critic_loss, {"q_data": all_data_q_values.mean().item(), "target_q_values": target_q_values.mean().item()}
+
+    def _forward_critic_intra_chunking(self, batch):
+        """Critic loss with temporal consistency for transformer critic.
+
+        Combines two objectives:
+
+        1. **Full-chunk TD loss** (standard SAC critic loss on the last
+           position Q_L):
+               L_td = (Q_L - [Σ γ^t r_t + γ^L V(s_next)])²
+
+        2. **Temporal consistency loss** across the per-prefix Q-values.
+           Consecutive Q-outputs must satisfy:
+               Q_{N+1} - Q_N  =  γ^N · r_N     for N = 1 … L-1
+           where Q_N = Q(s0, a0, …, a_{N-1}) is the transformer output at
+           position N-1.  The full-chunk TD loss anchors the absolute scale;
+           the consistency loss propagates that signal to every position.
+
+        Total: L = L_td  +  w · L_consist
+        (w is ``algorithm.consistency_loss_weight``, default 1.0)
+
+        Requires use_dsrl=True and use_transformer_critic=True.
+        """
+        gamma = self.cfg.algorithm.gamma
+        agg_q = self.cfg.algorithm.get("agg_q", "min")
+        bootstrap_type = self.cfg.algorithm.get("bootstrap_type", "standard")
+        consistency_weight = self.cfg.algorithm.get(
+            "consistency_loss_weight", 1.0
+        )
+
+        curr_obs = batch["curr_obs"]
+        next_obs = batch["next_obs"]
+        actions = batch["actions"]  # [B, L, action_dim]
+        rewards = batch["rewards"].to(self.torch_dtype)  # [B, L]
+        terminations = batch["terminations"]  # [B, L]
+
+        B, L = actions.shape[0], actions.shape[1]
+        num_action_chunks = self.cfg.actor.model.get("num_action_chunks", 1)
+        discount = gamma**num_action_chunks
+
+        alive_mask = (~terminations).cumprod(dim=1).to(self.torch_dtype)  # [B, L]
+        rewards = rewards * alive_mask
+
+        # ---- Full-chunk discounted reward sum ----
+        gamma_powers = torch.pow(
+            gamma,
+            torch.arange(L, device=self.device, dtype=torch.float32),
+        )  # [L]: γ^0 … γ^{L-1}
+        rewards_for_bootstrap = (
+            (rewards * gamma_powers.unsqueeze(0))
+            .sum(dim=-1, keepdim=True)
+            .to(self.torch_dtype)
+        )  # [B, 1]
+
+        # ---- Bootstrap V(s_next) from target network ----
+        with torch.no_grad():
+            next_actions, next_log_pi, _ = self.model(
+                forward_type=ForwardType.SAC, obs=next_obs, train=True
+            )
+            if next_log_pi.ndim == 1:
+                next_log_pi = next_log_pi.unsqueeze(-1)
+            next_log_pi = next_log_pi.sum(dim=-1, keepdim=True)
+
+            all_qf_next_target = self.target_model(
+                forward_type=ForwardType.SAC_Q,
+                obs=next_obs,
+                actions=next_actions,
+                shared_feature=None,
+                train=True,
+            )
+
+            if self.critic_subsample_size > 0:
+                sample_idx = torch.randint(
+                    0,
+                    all_qf_next_target.shape[-1],
+                    (self.critic_subsample_size,),
+                    generator=self.critic_sample_generator,
+                    device=self.device,
+                )
+                all_qf_next_target = all_qf_next_target.index_select(
+                    dim=-1, index=sample_idx
+                )
+
+            if agg_q == "min":
+                qf_next_target, _ = torch.min(
+                    all_qf_next_target, dim=1, keepdim=True
+                )
+            elif agg_q == "mean":
+                qf_next_target = torch.mean(
+                    all_qf_next_target, dim=1, keepdim=True
+                )
+
+            if self.cfg.algorithm.get("backup_entropy", True):
+                qf_next_target = (
+                    qf_next_target - self.entropy_temp.alpha * next_log_pi
+                ).to(self.torch_dtype)
+
+            if bootstrap_type == "always":
+                target_q_values = (
+                    rewards_for_bootstrap + discount * qf_next_target
+                )
+            elif bootstrap_type == "standard":
+                target_q_values = (
+                    rewards_for_bootstrap
+                    + (~(terminations.any(dim=-1, keepdim=True)))
+                    * discount
+                    * qf_next_target
+                )
+            else:
+                raise NotImplementedError(f"{bootstrap_type=} is not supported!")
+            # target_q_values: [B, 1]
+
+        # ---- Per-prefix Q-values from the transformer critic ----
+        all_prefix_q = self.model(
+            forward_type=ForwardType.SAC_Q,
+            obs=curr_obs,
+            actions=actions,
+            return_all_prefixes=True,
+            train=True,
+        )  # [B, L, out_dim]
+
+        # ---- 1) Full-chunk TD loss (last position) ----
+        q_full = all_prefix_q[:, -1, :]  # [B, out_dim]
+        target_q_values = target_q_values.to(dtype=q_full.dtype)
+        td_loss = F.mse_loss(q_full, target_q_values.expand_as(q_full))
+
+        # ---- 2) Temporal consistency loss ----
+        # Q_{N+1} - Q_N should equal γ^N · r_N  (for N = 1 … L-1)
+        # In position indices: pos[n] - pos[n-1] = γ^n · r_n  (n = 1 … L-1)
+        q_diffs = (
+            all_prefix_q[:, 1:, :] - all_prefix_q[:, :-1, :]
+        )  # [B, L-1, out_dim]
+
+        expected_diffs = (
+            gamma_powers[1:].unsqueeze(0) * rewards[:, 1:]
+        ).to(
+            dtype=q_diffs.dtype
+        )  # [B, L-1]
+        expected_diffs = expected_diffs.unsqueeze(-1).expand_as(q_diffs)
+
+        consistency_loss = F.mse_loss(q_diffs, expected_diffs.detach())
+
+        critic_loss = td_loss + consistency_weight * consistency_loss
+
+        metrics = {
+            "q_data": q_full.mean().item(),
+            "target_q_values": target_q_values.mean().item(),
+            "td_loss": td_loss.item(),
+            "consistency_loss": consistency_loss.item(),
+            "critic_loss": critic_loss.item(),
+        }
+        return critic_loss, metrics
 
     @Worker.timer("forward_actor")
     def forward_actor(self, batch):

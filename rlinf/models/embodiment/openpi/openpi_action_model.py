@@ -251,7 +251,7 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
                     n_layer=10,
                     action_horizon=self.config.action_horizon,
                     dropout_rate=0.1,
-                    out_dim=1,
+                    num_q_heads=self.config.dsrl_num_q_heads,
                 ).to(dtype=_dsrl_dtype)
             else:
                 if self.config.use_action_chunking:
@@ -1241,6 +1241,7 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
         actions=None,
         detach_encoder=False,
         train=False,
+        return_all_prefixes=False,
         **kwargs,
     ):
         """Q-value forward pass for DSRL.
@@ -1254,9 +1255,13 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
             actions: [B, action_dim] or [B, action_horizon, action_dim]
             detach_encoder: Whether to detach encoder gradients.
             train: Whether to use data augmentation.
+            return_all_prefixes: When True and using transformer critic, return
+                per-prefix Q-values [B, T, out_dim] instead of only the last
+                position [B, out_dim].  Used by intra-chunk N-step targets.
 
         Returns:
-            q_values: [B, num_q_heads] - Q-values from all Q-networks.
+            q_values: [B, num_q_heads] when return_all_prefixes=False,
+                      [B, T, out_dim] when return_all_prefixes=True (transformer critic only).
         """
         if not self.config.use_dsrl:
             raise ValueError("sac_q_forward called but use_dsrl=False")
@@ -1305,7 +1310,8 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
 
         if self.config.use_transformer_critic:
             q_values = self.critic(state_features, image_features, actions)
-            q_values = q_values[:, -1, :] # [B, action_horizon, out_dim] -> [B, out_dim]
+            if not return_all_prefixes:
+                q_values = q_values[:, -1, :]  # [B, action_horizon, out_dim] -> [B, out_dim]
         else:
             # Process actions (DSRL: should be noise, already flattened)
             if actions.dim() == 3 and not self.config.use_action_chunking:

@@ -22,7 +22,7 @@ runner:
   logger:
     log_path: "../results"
     project_name: rlinf
-    experiment_name: "metaworld_50_task2trial0_pi0_trafocritic_q_chk" #"metaworld_50_ppo_openpi_pi05"
+    experiment_name: "metaworld_50_task2trial0_pi0_trafocritic_consistencyL_q_chk" #"metaworld_50_ppo_openpi_pi05"
     logger_backends: ["wandb"] # wandb, swanlab
 
   max_epochs: 10000
@@ -58,6 +58,9 @@ algorithm:
   backup_entropy: False
   critic_subsample_size: 0
   critic_actor_ratio: 5 #1
+  consistency_loss_weight: 1.0
+  use_intra_chunking: True  # consistency loss is only supported for intra-chunking
+  use_sequential_sampling: True
 
   bootstrap_type: standard
   gamma: 0.999
@@ -75,8 +78,9 @@ algorithm:
   replay_buffer:
     enable_cache: True
     enable_preload: True
-    cache_size: 35 #15000
-    sample_window_size: 35 #15000
+    prefetch_size: 200
+    cache_size: 30 #15000
+    sample_window_size: 30 #15000
     min_buffer_size: 5 #30 #10
     auto_save: False
 
@@ -167,7 +171,7 @@ actor:
       use_dsrl: True
       dsrl_state_dim: 4
       dsrl_action_noise_dim: 32
-      dsrl_num_q_heads: 2 #10
+      dsrl_num_q_heads: 1 #10
       dsrl_image_latent_dim: 64
       dsrl_state_latent_dim: 64
       dsrl_hidden_dims: [512, 512, 512] #[128, 128, 128]
@@ -178,7 +182,7 @@ actor:
       action_magnitude: 1.0
       use_state_encoder: True
       use_transformer_critic: True # state encoder has to be true for transformer critic
-      use_intra_chunking: False
+      
 
   optim:
     lr: 1.0e-4

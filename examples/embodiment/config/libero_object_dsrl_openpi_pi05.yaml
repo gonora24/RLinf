@@ -26,13 +26,13 @@ runner:
     logger_backends: ["wandb"]
 
   max_epochs: 20000
-  max_steps: 20000
+  max_steps: -1
 
   only_eval: False
-  val_check_interval: -1
-  save_interval: 60 #60
+  val_check_interval: 20
+  save_interval: 40 #60
 
-  resume_dir: "/pfs/work9/workspace/scratch/ka_eu3660-rlinf_tmp/logs/20260404-00:53:32-libero_object_dsrl_openpi_pi05/libero_object_task0_dsrl_openpi_pi05/checkpoints/global_step_80"
+  resume_dir: null #"/pfs/work9/workspace/scratch/ka_eu3660-rlinf_tmp/logs/20260404-00:53:32-libero_object_dsrl_openpi_pi05/libero_object_task0_dsrl_openpi_pi05/checkpoints/global_step_80"
   ckpt_path: null
 
 algorithm:
@@ -75,8 +75,8 @@ algorithm:
   replay_buffer:
     enable_cache: True
     enable_preload: True
-    cache_size: 80 #200 #15000
-    sample_window_size: 80 #200 #15000
+    cache_size: 70 #200 #15000
+    sample_window_size: 70 #200 #15000
     min_buffer_size: 30
     auto_save: False
 
