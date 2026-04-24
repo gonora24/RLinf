@@ -247,8 +247,8 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
                     state_dim=self.config.dsrl_state_latent_dim,
                     action_dim=self.config.dsrl_action_noise_dim,
                     n_embed=self.config.dsrl_hidden_dims[-1],
-                    n_heads=4, # attention heads
-                    n_layer=10,
+                    n_heads=8, # attention heads
+                    n_layer=3,
                     action_horizon=self.config.action_horizon,
                     dropout_rate=0.1,
                     num_q_heads=self.config.dsrl_num_q_heads,
@@ -636,17 +636,17 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
             forward_action = None
 
         forward_inputs = {
-            "chains": outputs["chains"],
-            "denoise_inds": outputs["denoise_inds"],
-            "tokenized_prompt": processed_obs["tokenized_prompt"],
-            "tokenized_prompt_mask": processed_obs["tokenized_prompt_mask"],
+            # "chains": outputs["chains"],
+            # "denoise_inds": outputs["denoise_inds"],
+            # "tokenized_prompt": processed_obs["tokenized_prompt"],
+            # "tokenized_prompt_mask": processed_obs["tokenized_prompt_mask"],
             # "action" is the env-executed action, and "model_action" is the original output by the model.
             # For small models, they are consistent. For large models (like pi), "action" is the result after output_transform.
             # For realworld human-in-the-loop training, only "action" can be provided by human.
-            "action": actions.reshape(actions.shape[0], -1).contiguous(),
-            "model_action": outputs["actions"]
-            .reshape(outputs["actions"].shape[0], -1)
-            .contiguous(),
+            # "action": actions.reshape(actions.shape[0], -1).contiguous(),
+            # "model_action": outputs["actions"]
+            # .reshape(outputs["actions"].shape[0], -1)
+            # .contiguous(),
         }
         if forward_action is not None:
             forward_inputs["action"] = forward_action
@@ -659,10 +659,10 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
             forward_inputs["nft_noise_level"] = outputs["nft_noise_level"]
 
         # Clone observations to avoid cross-step reference issues.
-        cloned_obs = copy_dict_tensor(
-            {k: v for k, v in to_process_obs.items() if k != "prompt"}
-        )
-        forward_inputs.update(cloned_obs)
+        # cloned_obs = copy_dict_tensor(
+        #     {k: v for k, v in to_process_obs.items() if k != "prompt"}
+        # )
+        # forward_inputs.update(cloned_obs)
 
         result = {
             "prev_logprobs": prev_logprobs,
