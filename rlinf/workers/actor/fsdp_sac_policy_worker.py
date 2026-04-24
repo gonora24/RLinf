@@ -349,11 +349,12 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
         bootstrap_type = self.cfg.algorithm.get("bootstrap_type", "standard")
         agg_q = self.cfg.algorithm.get("agg_q", "min")
         use_dsrl = self.cfg.actor.model.get("openpi", {}).get("use_dsrl", False)
+        chunk_reward = self.cfg.algorithm.get("chunk_reward", False)
         use_action_chunking = self.cfg.actor.model.get("openpi", {}).get("use_action_chunking", False)
         if use_dsrl:
             num_action_chunks = self.cfg.actor.model.get("num_action_chunks", 1)
             discount = self.cfg.algorithm.gamma**num_action_chunks
-            if use_action_chunking:
+            if chunk_reward:
                 self.action_horizon = batch["actions"].shape[1]
                 batch_dim = batch["actions"].shape[0]
                 # Create mask: True until first termination, then False
@@ -524,8 +525,9 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
         num_action_chunks = self.cfg.actor.model.get("num_action_chunks", 1)
         discount = gamma**num_action_chunks
 
-        alive_mask = (~terminations).cumprod(dim=1).to(self.torch_dtype)  # [B, L]
-        rewards = rewards * alive_mask
+        rewards_for_bootstrap = rewards[:, 0:1].to(self.torch_dtype)
+        # alive_mask = (~terminations).cumprod(dim=1).to(self.torch_dtype)  # [B, L]
+        # rewards = rewards * alive_mask
 
         # ---- Full-chunk discounted reward sum ----
         gamma_powers = torch.pow(
@@ -533,7 +535,7 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
             torch.arange(L, device=self.device, dtype=torch.float32),
         )  # [L]: γ^0 … γ^{L-1}
         rewards_for_bootstrap = (
-            (rewards * gamma_powers.unsqueeze(0))
+            (rewards_for_bootstrap * gamma_powers.unsqueeze(0))
             .sum(dim=-1, keepdim=True)
             .to(self.torch_dtype)
         )  # [B, 1]
@@ -962,11 +964,12 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
             os.path.join(target_model_save_path, f"checkpoint_rank_{self._rank}.pt"),
         )
 
-        # save replay buffer
-        buffer_save_path = os.path.join(
-            save_base_path, f"sac_components/replay_buffer/rank_{self._rank}"
-        )
-        self.replay_buffer.save_checkpoint(buffer_save_path)
+        # we don't save replay buffer to avoid OOM
+        # # save replay buffer
+        # buffer_save_path = os.path.join(
+        #     save_base_path, f"sac_components/replay_buffer/rank_{self._rank}"
+        # )
+        # self.replay_buffer.save_checkpoint(buffer_save_path)
 
     def load_checkpoint(self, load_base_path):
         # load model
