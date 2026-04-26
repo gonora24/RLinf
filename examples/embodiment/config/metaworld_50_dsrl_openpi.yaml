@@ -22,15 +22,15 @@ runner:
   logger:
     log_path: "../results"
     project_name: rlinf
-    experiment_name: "metaworld_50_task1trial0_pi0" #"metaworld_50_ppo_openpi_pi05"
+    experiment_name: "metaworld_50_task2trial0_pi0" #"metaworld_50_ppo_openpi_pi05"
     logger_backends: ["wandb"] # wandb, swanlab
 
   max_epochs: 10000
   max_steps: -1
 
   only_eval: False # False
-  val_check_interval: 10
-  save_interval: 60
+  val_check_interval: -1
+  save_interval: -1
 
   resume_dir: null #"/pfs/work9/workspace/scratch/ka_eu3660-rlinf_tmp/logs/20260410-21:10:24-metaworld_50_dsrl_openpi/metaworld_50_tasktrial0_pi0/checkpoints/global_step_120"
   ckpt_path: null  # Optional: path to a .pt checkpoint. If not None, it will be loaded after the model is instantiated (for evaluation).
@@ -40,6 +40,7 @@ algorithm:
   kl_penalty: kl  # how to estimate kl divergence: kl or kl_penalty
   group_size: 1
   reward_coef: 1.0
+  chunk_reward: False
 
   rollout_epoch: 1
   eval_rollout_epoch: 1 # set eval_rollout_epoch > 0 when enable runner.only_eval or runner.val_check_interval > 0
@@ -75,14 +76,14 @@ algorithm:
   replay_buffer:
     enable_cache: True
     enable_preload: True
-    cache_size: 30 #15000
-    sample_window_size: 30 #15000
-    min_buffer_size: 5 #30 #10
+    cache_size: 100 #15000
+    sample_window_size: 100 #15000
+    min_buffer_size: 3 #30 #10
     auto_save: False
 
   target_update_freq: 1
   target_update_type: all
-  train_actor_steps: 5 #0
+  train_actor_steps: 3 #0
 
   filter_rewards: False
   rewards_lower_bound: 0.1
@@ -111,7 +112,7 @@ env:
   # Override the default values in env/metaworld_50
   train:
     total_num_envs: 16
-    specific_reset_id: 10
+    specific_reset_id: 20
     auto_reset: False
     use_rel_reward: False
     use_step_penalty: True
@@ -126,7 +127,7 @@ env:
     ignore_terminations: False
     is_eval: True
     group_size: 1
-    specific_reset_id: 10
+    specific_reset_id: 20
     use_ordered_reset_state_ids: False
     video_cfg:
       save_video: True
@@ -148,8 +149,8 @@ rollout:
 actor:
   group_name: "ActorGroup"
   training_backend: "fsdp"
-  micro_batch_size: 256 #1024
-  global_batch_size: 256 #1024 # maximum : global batch size = micro batch size * actor num_processes.
+  micro_batch_size: 512 #1024
+  global_batch_size: 512 #1024 # maximum : global batch size = micro batch size * actor num_processes.
   seed: 42
   enable_offload: False
 
@@ -180,17 +181,18 @@ actor:
       use_action_chunking: False
       action_magnitude: 1.0
       use_state_encoder: False
+      use_transformer_critic: False
 
   optim:
     lr: 1.0e-4
     adam_beta1: 0.9
     adam_beta2: 0.96
     adam_eps: 1.0e-08
-    clip_grad: 3.5
+    clip_grad: 20.0 #3.5
 
   critic_optim:
     lr: 3.0e-4
-    clip_grad: 10.0
+    clip_grad: 40.0 #10.0
     lr_scheduler: torch_constant
 
   fsdp_config:
