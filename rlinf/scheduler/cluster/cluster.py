@@ -271,6 +271,8 @@ class Cluster:
             self._cluster_cfg.num_nodes if self._cluster_cfg is not None else num_nodes
         )
         assert self._num_nodes >= 0, "num_nodes must be greater than or equal to 0."
+        num_cpus_env = os.environ.get("NUM_CPUS")
+        num_cpus = int(num_cpus_env) if num_cpus_env is not None else None
 
         try:
             # First try to connect to an existing Ray cluster
@@ -278,11 +280,13 @@ class Cluster:
                 address="auto",
                 logging_level=Cluster.LOGGING_LEVEL,
                 namespace=Cluster.NAMESPACE,
+                num_cpus=num_cpus,
             )
         except ConnectionError:
             local_ray_init_kwargs = {
                 "logging_level": Cluster.LOGGING_LEVEL,
                 "namespace": Cluster.NAMESPACE,
+                "num_cpus": num_cpus,
             }
             ray_temp_dir = os.environ.get("RAY_TMPDIR")
             if ray_temp_dir:
@@ -400,10 +404,13 @@ class Cluster:
 
     def _init_from_existing_managers(self):
         if not ray.is_initialized():
+            # num_cpus_env = os.environ.get("NUM_CPUS")
+            # num_cpus = int(num_cpus_env) if num_cpus_env is not None else None
             ray.init(
                 address="auto",
                 namespace=Cluster.NAMESPACE,
                 logging_level=Cluster.LOGGING_LEVEL,
+                # num_cpus=num_cpus,
             )
 
         from ..manager.node_manager import NodeManager
