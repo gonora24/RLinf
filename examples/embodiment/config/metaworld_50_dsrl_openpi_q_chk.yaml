@@ -22,7 +22,7 @@ runner:
   logger:
     log_path: "../results"
     project_name: rlinf
-    experiment_name: "metaworld_50_task2trial0_pi0_trafocritic_qchk_dsrlloss" #"metaworld_50_ppo_openpi_pi05"
+    experiment_name: "metaworld_50_task2trial0_pi0_toperlcritic_qchk_dsrlloss" #"metaworld_50_ppo_openpi_pi05"
     logger_backends: ["wandb"] # wandb, swanlab
 
   max_epochs: 10000
@@ -79,12 +79,12 @@ algorithm:
     enable_preload: True
     cache_size: 100 #15000
     sample_window_size: 100 #15000
-    min_buffer_size: 30 #10
+    min_buffer_size: 3 #10
     auto_save: False
 
   target_update_freq: 1
   target_update_type: all
-  train_actor_steps: 30
+  train_actor_steps: 3
 
   filter_rewards: False
   rewards_lower_bound: 0.1
@@ -179,7 +179,8 @@ actor:
       use_action_chunking: True
       action_magnitude: 1.0
       use_state_encoder: True
-      use_transformer_critic: True # state encoder has to be true for transformer critic
+      use_transformer_critic: False # state encoder has to be true for transformer critic
+      use_toperl_critic: True
 
   optim:
     lr: 1.0e-4

@@ -74,23 +74,23 @@ from addict import Dict
 
 class CausalSelfAttention(nn.Module):
 
-    def __init__(self, config):
+    def __init__(self, n_embd, n_head, bias, dropout):
         super().__init__()
-        assert config.n_embd % config.n_head == 0
+        assert n_embd % n_head == 0
 
         # key, query, value projections for all heads, but in a batch
-        self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd,
-                                bias=config.bias)
+        self.c_attn = nn.Linear(n_embd, 3 * n_embd,
+                                bias=bias)
 
         # output projection
-        self.c_proj = nn.Linear(config.n_embd, config.n_embd,
-                                bias=config.bias)  # Note: needs special init
+        self.c_proj = nn.Linear(n_embd, n_embd,
+                                bias=bias)  # Note: needs special init
 
         # regularization
-        self.dropout = config.dropout
-        self.resid_dropout = nn.Dropout(config.dropout)
-        self.n_head = config.n_head
-        self.n_embd = config.n_embd
+        self.dropout = dropout
+        self.resid_dropout = nn.Dropout(dropout)
+        self.n_head = n_head
+        self.n_embd = n_embd
 
     def forward(self, x):
         B, T, C = x.shape[:-2], x.shape[-2], x.shape[-1]
@@ -120,13 +120,12 @@ class CausalSelfAttention(nn.Module):
 
 class MLP(nn.Module):
 
-    def __init__(self, config):
+    def __init__(self, n_embd, bias, dropout):
         super().__init__()
-        bias = config.bias
-        self.c_fc = nn.Linear(config.n_embd, 4 * config.n_embd, bias=bias)
+        self.c_fc = nn.Linear(n_embd, 4 * n_embd, bias=bias)
         self.gelu = nn.GELU()
-        self.c_proj = nn.Linear(4 * config.n_embd, config.n_embd, bias=bias)
-        self.dropout = nn.Dropout(config.dropout)
+        self.c_proj = nn.Linear(4 * n_embd, n_embd, bias=bias)
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
         x = self.c_fc(x)
@@ -138,14 +137,14 @@ class MLP(nn.Module):
 
 class Block(nn.Module):
 
-    def __init__(self, config):
+    def __init__(self, use_layer_norm, n_embd, n_head, bias, dropout):
         super().__init__()
-        self.use_layer_norm = config.use_layer_norm
+        self.use_layer_norm = use_layer_norm
         if self.use_layer_norm:
-            self.ln_1 = nn.LayerNorm(config.n_embd, bias=config.bias)
-            self.ln_2 = nn.LayerNorm(config.n_embd, bias=config.bias)
-        self.attn = CausalSelfAttention(config)
-        self.mlp = MLP(config)
+            self.ln_1 = nn.LayerNorm(n_embd, bias=bias)
+            self.ln_2 = nn.LayerNorm(n_embd, bias=bias)
+        self.attn = CausalSelfAttention(n_embd, n_head, bias, dropout)
+        self.mlp = MLP(n_embd, bias, dropout)
 
     def forward(self, x):
         if self.use_layer_norm:
@@ -180,27 +179,26 @@ def parse_dtype_device(dtype: str, device: str):
 
 class CriticGPT(nn.Module):
 
-    def __init__(self, **config):
+    def __init__(self, state_dim, image_dim, action_dim, action_horizon, n_embd, n_head, n_layer, dropout, use_layer_norm, bias, relative_pos):
         super().__init__()
 
-        config = Dict(config)
-        self.config = config
-        self.use_layer_norm = config.use_layer_norm
+        self.use_layer_norm = use_layer_norm
 
         module_dict = dict(
-            action_encoder=nn.Linear(config.action_dim, config.n_embd,
+            context_proj=nn.Linear(state_dim + image_dim, n_embd, bias=False),
+            action_encoder=nn.Linear(action_dim, n_embd,
                                      bias=False),
-            pos_enc=nn.Embedding(config.block_size, config.n_embd),
-            drop=nn.Dropout(config.dropout),
-            h=nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
-            ln_f=nn.LayerNorm(config.n_embd, bias=config.bias),
+            pos_enc=nn.Embedding(1 + action_horizon, n_embd),
+            drop=nn.Dropout(dropout),
+            h=nn.ModuleList([Block(use_layer_norm, n_embd, n_head, bias, dropout) for _ in range(n_layer)]),
+            ln_f=nn.LayerNorm(n_embd, bias=bias),
         )
 
         if not self.use_layer_norm:
             del module_dict['ln_f']
 
         self.transformer = nn.ModuleDict(module_dict)
-        self.output_layer = nn.Linear(config.n_embd, 1, bias=False)
+        self.output_layer = nn.Linear(n_embd, 1, bias=False)
 
         # init all weights
         self.apply(self._init_weights)
@@ -209,18 +207,18 @@ class CriticGPT(nn.Module):
         for pn, p in self.named_parameters():
             if pn.endswith('c_proj.weight'):
                 torch.nn.init.normal_(p, mean=0.0,
-                                      std=0.02 / math.sqrt(2 * config.n_layer))
+                                      std=0.02 / math.sqrt(2 * n_layer))
 
-        # device and dtype?
-        dtype, device = parse_dtype_device(config.dtype, config.device)
-        self.dtype, self.device = dtype, device
+        # # device and dtype?
+        # dtype, device = parse_dtype_device(dtype, device)
+        # self.dtype, self.device = dtype, device
 
-        self.transformer.to(device=device, dtype=dtype)
-        self.output_layer.to(device=device, dtype=dtype)
+        # self.transformer.to(device=device, dtype=dtype)
+        # self.output_layer.to(device=device, dtype=dtype)
 
-        self.gpt_name = config.name + "_gpt"
+        # self.gpt_name = name + "_gpt"
 
-        self.relative_pos = config.relative_pos
+        self.relative_pos = relative_pos
 
     @staticmethod
     def _init_weights(module):
@@ -231,7 +229,7 @@ class CriticGPT(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(self, state_features, image_features, actions, idx_s, idx_a):
+    def forward(self, state_features, image_features, actions, idx_s=None, idx_a=None):
         """
         Compute the value of one state and a sequence of actions
 
@@ -239,10 +237,10 @@ class CriticGPT(nn.Module):
             state_features: current state, [*add_dim, state_dim]
             image_features: current image, [*add_dim, image_dim]
             actions: action sequences, [*add_dim, num_actions, action_dim]
-            idx_s: time step index of current state, [*add_dim]
-            idx_a: time step indices of actions, [*add_dim, num_actions]
+            idx_s: optional time step index of current state, [*add_dim]
+            idx_a: optional time step indices of actions, [*add_dim, num_actions]
 
-            The idx_s and idx_a are used to compute the positional embeddings
+            The idx_s and idx_a are only used when relative_pos is False.
 
         Returns:
             The output has multiple tokens, with the first token the V-func, and
@@ -250,36 +248,44 @@ class CriticGPT(nn.Module):
         """
 
         if actions is None:
-            assert idx_a is None
+            if idx_a is not None:
+                raise ValueError("idx_a must be None when actions is None")
             t = 0
         else:
             t = actions.size(-2)
 
-        assert t + 1 <= self.config.block_size
+        assert t + 1 <= self.transformer.pos_enc.num_embeddings
 
-        state_emd = state_features.unsqueeze(-2) # [*add_dim, 1, hidden_dim]
-        image_emd = image_features.unsqueeze(-2) # [*add_dim, 1, hidden_dim]
+        context_feat = torch.cat([state_features, image_features], dim=-1)
+        context_emb = self.transformer.context_proj(context_feat).unsqueeze(-2)  # [*add_dim, 1, hidden_dim]
         if actions is not None:
             action_emd = self.transformer.action_encoder(actions)
 
-            # Shape [*add_dim, num_actions + 2, n_embed]
-            seq_emb = torch.cat([state_emd, image_emd, action_emd], dim=-2)
-
-            # Shape [*add_dim, num_actions + 2]
-            seq_pos = torch.cat([idx_s[..., None], idx_a], dim=-1)
+            # Shape [*add_dim, num_actions + 1, n_embed]
+            seq_emb = torch.cat([context_emb, action_emd], dim=-2)
 
         else:
-            seq_emb = torch.cat([state_emd, image_emd], dim=-2)
-            seq_pos = idx_s[..., None]
+            seq_emb = context_emb
 
         # If relative positional embedding is used,
-        # then state position is always 0, and action positions are 1, 2, ...
+        # then context position is always 0, and action positions are 1, 2, ...
         if self.relative_pos:
-            # shape (2, num_actions + 2)
-            seq_pos = torch.arange(0, 2 + t, dtype=torch.long, # 2 for state and image
-                                   device=self.device)[None]
+            # shape (1, num_actions + 1)
+            seq_pos = torch.arange(0, 1 + t, dtype=torch.long,
+                                   device=context_emb.device)[None]
+        else:
+            if idx_s is None:
+                raise ValueError("idx_s is required when relative_pos is False")
+            if actions is not None and idx_a is None:
+                raise ValueError("idx_a is required when relative_pos is False and actions is not None")
 
-        # Shape [*add_dim, num_actions + 2, n_embed]
+            # Shape [*add_dim, num_actions + 1]
+            if actions is not None:
+                seq_pos = torch.cat([idx_s[..., None], idx_a], dim=-1)
+            else:
+                seq_pos = idx_s[..., None]
+
+        # Shape [*add_dim, num_actions + 1, n_embed]
         seq_pos_emb = self.transformer.pos_enc(seq_pos)
 
         x = self.transformer.drop(seq_emb + seq_pos_emb)
@@ -290,10 +296,10 @@ class CriticGPT(nn.Module):
         if self.use_layer_norm:
             x = self.transformer.ln_f(x)
 
-        # Shape [*add_dim, num_actions + 2, n_embed]
-        # -> Shape [*add_dim, num_actions + 2, 1] -> [*add_dim, num_actions + 2]
-        x = self.output_layer(x).squeeze(-1)  # value is dimensionless
+        # Shape [*add_dim, num_actions + 1, n_embed]
+        # -> Shape [*add_dim, num_actions + 1, 1] -> [*add_dim, num_actions + 1]
+        x = self.output_layer(x)  # value is dimensionless
 
-        # v = x[..., 0]  # shape [*add_dim]
-        # q = x[..., 2:]  # shape [*add_dim, num_actions]
+        # v = x[..., ..., 0]  # shape [*add_dim]
+        # q = x[..., ..., 1:]  # shape [*add_dim, num_actions]
         return x

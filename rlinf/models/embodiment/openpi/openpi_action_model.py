@@ -27,7 +27,7 @@ from openpi.models.pi0_config import Pi0Config
 from openpi.models_pytorch.pi0_pytorch import PI0Pytorch, make_att_2d_masks
 
 from rlinf.models.embodiment.base_policy import BasePolicy, ForwardType
-from rlinf.models.embodiment.modules.critic_transformer import SeqQFuncTorch
+from rlinf.models.embodiment.modules.critic_transformer import CriticGPT, SeqQFuncTorch
 from rlinf.models.embodiment.modules.explore_noise_net import ExploreNoiseNet
 from rlinf.models.embodiment.modules.value_head import ValueHead
 from rlinf.utils.logging import get_logger
@@ -80,6 +80,7 @@ class OpenPi0Config(Pi0Config):
     )  # Hidden dims for Q-head and GaussianPolicy
     use_action_chunking: bool = False  # use action chunking for DSRL
     use_transformer_critic: bool = False  # use transformer critic for DSRL
+    use_toperl_critic: bool = False  # use topErl critic for DSRL
     action_magnitude: float = 1.0  # action magnitude for DSRL
     use_state_encoder: bool = False  # use state encoder for DSRL
 
@@ -252,6 +253,20 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
                     action_horizon=self.config.action_horizon,
                     dropout_rate=0.1,
                     num_q_heads=self.config.dsrl_num_q_heads,
+                ).to(dtype=_dsrl_dtype)
+            elif self.config.use_toperl_critic:
+                self.critic = CriticGPT(
+                    state_dim=self.config.dsrl_state_latent_dim,
+                    image_dim=self.config.dsrl_image_latent_dim,
+                    action_dim=self.config.dsrl_action_noise_dim,
+                    action_horizon=self.config.action_horizon,
+                    n_embd=self.config.dsrl_hidden_dims[-1],
+                    n_head=8,
+                    n_layer=3,
+                    dropout=0.1,
+                    use_layer_norm=True,
+                    bias=False,
+                    relative_pos=True,
                 ).to(dtype=_dsrl_dtype)
             else:
                 if self.config.use_action_chunking:
@@ -1308,7 +1323,7 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
             if self.config.use_state_encoder:
                 state_features = state_features.detach()
 
-        if self.config.use_transformer_critic:
+        if self.config.use_transformer_critic or self.config.use_toperl_critic:
             q_values = self.critic(state_features, image_features, actions)
             if not return_all_prefixes:
                 q_values = q_values[:, -1, :]  # [B, action_horizon, out_dim] -> [B, out_dim]
