@@ -119,13 +119,12 @@ class AutoregressiveActionTransformer(nn.Module):
     def __init__(
         self,
         state_dim: int,
+        image_dim: int,
         action_dim: int,
         chunk_size: int = 8,
         d_model: int = 128,
         n_layers: int = 3,
         n_heads: int = 4,
-        img_channels: int = 3,
-        img_size: int = 64,
         log_std_min: float = -20.0,
         log_std_max: float = 2.0,
         low: float = -1.0,
@@ -139,7 +138,8 @@ class AutoregressiveActionTransformer(nn.Module):
         self.log_std_max = log_std_max
         self.low = low
         self.high = high
-
+        
+        self.context_proj = nn.Linear(state_dim + image_dim, d_model, bias=False)
         self.action_proj = nn.Linear(action_dim, d_model)
         self.start_token = nn.Parameter(torch.zeros(d_model))
 
@@ -153,18 +153,16 @@ class AutoregressiveActionTransformer(nn.Module):
 
         self.out = nn.Linear(d_model, action_dim * 2)
 
-    def forward(self, state_features: torch.Tensor, image_features: torch.Tensor):
+    def forward(self, features: torch.Tensor):
         """
         Args:
-            state_features: [B, state_dim]
-            image_features: [B, image_dim]
+            features: [B, state_dim + image_dim]
         Returns:
             mu: [B, chunk_size, action_dim]
             std: [B, chunk_size, action_dim]
         """
-        B = state_features.shape[0]
-        context = torch.cat([state_features, image_features], dim=-1)  # [B, state_dim + image_dim]
-        context = context.unsqueeze(1)  # [B, 1, state_dim + image_dim] as memory for transformer
+        B = features.shape[0]
+        context = self.context_proj(features).unsqueeze(1)  # [B, 1, state_dim + image_dim] as memory for transformer
         # Shape [B, 1, state_dim + image_dim] -> Shape [B, 1, d_model]
         h = self.transformer(context)  # [B, chunk_size, d_model]
         out = self.out(h).squeeze(1)  # [B, action_dim*2]
@@ -173,20 +171,18 @@ class AutoregressiveActionTransformer(nn.Module):
         std = log_std.exp()
         return mu, std
 
-    def sample(self, state_features: torch.Tensor, image_features: torch.Tensor, deterministic: bool = False):
+    def sample(self, features: torch.Tensor, deterministic: bool = False):
         """Sample a chunk of actions with correct log_prob.
         Args:
-            state: [B, state_dim]
-            image: [B, C, H, W]
+            features: [B, state_dim + image_dim]
             deterministic: Whether to use mean
         Returns:
             actions: [B, chunk_size, action_dim]
             log_prob: [B]  # summed over chunk and action dim
         """
-        B = state_features.shape[0]
+        B = features.shape[0]
         # Encode context
-        context = torch.cat([state_features, image_features], dim=-1)  # [B, state_dim + image_dim]
-        context = context.unsqueeze(1)  # [B, 1, state_dim + image_dim] as memory for transformer
+        context = self.context_proj(features).unsqueeze(1)  # [B, 1, state_dim + image_dim] as memory for transformer
 
         actions = []
         log_probs = []
@@ -208,7 +204,7 @@ class AutoregressiveActionTransformer(nn.Module):
             # Sample / deterministic
             if deterministic:
                 action = torch.tanh(mu)
-                log_prob = torch.zeros(B, device=state_features.device)
+                log_prob = torch.zeros(B, device=features.device)
             else:
                 # Create base Normal distribution (wrapped as multivariate via Independent)
                 normal = torch.distributions.Normal(mu, std)

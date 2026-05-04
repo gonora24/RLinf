@@ -29,6 +29,89 @@ from rlinf.utils.nested_dict_process import (
 )
 
 
+def flatten_intermediate_obs_for_replay_buffer(
+    per_rollout_step_obs: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Lay out intermediate observations for flat replay rows.
+
+    ``per_rollout_step_obs`` has length ``T`` (rollout steps); each step is a dict of
+    tensors shaped ``[K, B, …]`` where ``K`` is the number of intermediate frames in
+    that chunk (same row order as ``curr_obs`` / ``next_obs`` after their ``T×B`` flatten).
+
+    Stacks to ``[T, K, B, …]`` at each leaf, then ``transpose(1, 2) → [T, B, K, …]`` and
+    ``reshape(-1, K, …)`` so the leading dimension is ``T*B`` and dimension ``1`` stays
+    ``K``. A sample row ``i`` then has shape ``[K, …]`` (e.g. ``[4, H, W, C]`` without batch
+    if you index with a single env row, or ``[4, b, …]`` inside the stored layout).
+
+    Args:
+        per_rollout_step_obs: Length-``T`` list of observation dicts shaped ``[K, B, …]``.
+
+    Returns:
+        Nested dict with the same keys as one step, leaf tensors ``[T*B, K, …]``.
+    """
+    if not per_rollout_step_obs:
+        return {}
+
+    merged = stack_list_of_dict_tensor(per_rollout_step_obs)
+
+    def tkb_to_tb_k(node: Any) -> Any:
+        if isinstance(node, torch.Tensor):
+            if node.dim() < 3:
+                raise ValueError(
+                    "intermediate_obs tensors must be at least "
+                    f"[T,K,B,...]; got shape={tuple(node.shape)}"
+                )
+            k = int(node.shape[1])
+            x = node.transpose(1, 2).contiguous()
+            return x.reshape(-1, k, *x.shape[3:])
+        if isinstance(node, dict):
+            return {key: tkb_to_tb_k(val) for key, val in node.items()}
+        return node
+
+    return tkb_to_tb_k(merged)
+
+
+def _index_leaves_along_t(node: Any, t: int) -> Any:
+    if isinstance(node, torch.Tensor):
+        return node[t]
+    if isinstance(node, dict):
+        return {key: _index_leaves_along_t(val, t) for key, val in node.items()}
+    return node
+
+
+def unflatten_intermediate_obs_from_replay_buffer(
+    flat_nested: dict[str, Any],
+    T: int,
+    B: int,
+) -> list[dict[str, Any]]:
+    """Inverse of :func:`flatten_intermediate_obs_for_replay_buffer` (e.g. checkpoint save).
+
+    Rebuilds the length-``T`` list of per-step dicts with leaves ``[K, B, …]`` from stored
+    ``[T*B, K, …]`` layout.
+    """
+    if not flat_nested:
+        return []
+
+    def tb_k_to_tkb(node: Any) -> Any:
+        if isinstance(node, torch.Tensor):
+            if node.shape[0] != T * B:
+                raise ValueError(
+                    f"Expected leading dim T*B={T * B}, got {node.shape[0]}"
+                )
+            if node.dim() < 3:
+                raise ValueError(
+                    f"Expected leaves [T*B, K, ...], got shape={tuple(node.shape)}"
+                )
+            x = node.reshape(T, B, *node.shape[1:])
+            return x.transpose(1, 2).contiguous()
+        if isinstance(node, dict):
+            return {key: tb_k_to_tkb(val) for key, val in node.items()}
+        return node
+
+    merged_tkb = tb_k_to_tkb(flat_nested)
+    return [_index_leaves_along_t(merged_tkb, t) for t in range(T)]
+
+
 def get_model_weights_id(versions: torch.Tensor) -> str:
     """
     Get the model weights id from the tensor.
@@ -49,6 +132,7 @@ class EnvOutput:
     """Environment output for a single chunk step."""
 
     obs: dict[str, Any]
+    intermediate_obs: Optional[dict[str, Any]] = None
     final_obs: Optional[dict[str, Any]] = None
     dones: Optional[torch.Tensor] = None  # [B]
     terminations: Optional[torch.Tensor] = None  # [B]
@@ -60,6 +144,7 @@ class EnvOutput:
 
     def __post_init__(self):
         self.obs = put_tensor_device(self.obs, "cpu")
+        self.intermediate_obs = [put_tensor_device(obs, "cpu") for obs in self.intermediate_obs] if self.intermediate_obs is not None else None
         self.final_obs = (
             put_tensor_device(self.final_obs, "cpu")
             if self.final_obs is not None
@@ -212,6 +297,11 @@ class EnvOutput:
             ]
             merged_final_obs = _merge_obs_dicts(final_obs_or_obs)
 
+        merged_intermediate_obs = None
+        intermediate_obs_list = [env_output["intermediate_obs"] for env_output in env_outputs]
+        if any(intermediate_obs is not None for intermediate_obs in intermediate_obs_list):
+            merged_intermediate_obs = _merge_obs_dicts(intermediate_obs_list)
+
         merged_dones = _merge_optional_tensor_field("dones")
         merged_terminations = _merge_optional_tensor_field("terminations")
         merged_truncations = _merge_optional_tensor_field("truncations")
@@ -229,6 +319,7 @@ class EnvOutput:
         # turn to EnvOutput and turn to dict to call post init for tensor processing
         return EnvOutput(
             obs=merged_obs,
+            intermediate_obs=merged_intermediate_obs,
             final_obs=merged_final_obs,
             dones=merged_dones,
             terminations=merged_terminations,
@@ -242,6 +333,11 @@ class EnvOutput:
         env_output_dict = {}
 
         env_output_dict["obs"] = self.prepare_observations(self.obs)
+        env_output_dict["intermediate_obs"] = (
+            self.prepare_observations(self.intermediate_obs)
+            if self.intermediate_obs is not None
+            else None
+        )
         env_output_dict["final_obs"] = (
             self.prepare_observations(self.final_obs)
             if self.final_obs is not None
@@ -384,6 +480,8 @@ class Trajectory:
 
     curr_obs: dict[str, Any] = field(default_factory=dict)
     next_obs: dict[str, Any] = field(default_factory=dict)
+    # Per rollout timestep: stacked obs from intermediate_obs list ([K, B, ...] keys).
+    intermediate_obs: list[dict[str, Any]] | None = None
 
     @staticmethod
     def _generate_field_mask(
@@ -531,7 +629,9 @@ class EmbodiedRolloutResult:
 
     curr_obs: list[dict[str, Any]] = field(default_factory=list)  # trajectory_length
     next_obs: list[dict[str, Any]] = field(default_factory=list)  # trajectory_length
-
+    intermediate_obs: list[list[dict[str, Any]]] = field(
+        default_factory=list
+    )  # per rollout step: many obs dicts (chunk intermediates); length = trajectory_length
     def append_step_result(self, result: ChunkStepResult):
         if result.actions is not None:
             self.actions.append(result.actions)
@@ -622,6 +722,13 @@ class EmbodiedRolloutResult:
         self.curr_obs.append(curr_obs)
         self.next_obs.append(next_obs)
 
+    def append_intermediate_obs(self, intermediate_obs=None):
+        assert intermediate_obs is not None
+        for i in range(len(intermediate_obs)):
+            if "task_descriptions" in intermediate_obs[i]:
+                intermediate_obs[i].pop("task_descriptions")
+        self.intermediate_obs.append(intermediate_obs)
+
     def to_trajectory(self) -> Trajectory:
         # return [trajectory_length, B, ...]
         trajectory = Trajectory(
@@ -671,6 +778,12 @@ class EmbodiedRolloutResult:
             for key in trajectory.next_obs.keys():
                 trajectory.next_obs[key] = trajectory.next_obs[key].cpu().contiguous()
 
+        if len(self.intermediate_obs) > 0:
+            trajectory.intermediate_obs = [stack_list_of_dict_tensor(obs) for obs in self.intermediate_obs]
+            for i in range(len(trajectory.intermediate_obs)):
+                for key in trajectory.intermediate_obs[i].keys():
+                    trajectory.intermediate_obs[i][key] = trajectory.intermediate_obs[i][key].cpu().contiguous()
+
         trajectory.model_weights_id = get_model_weights_id(
             trajectory.versions
             if trajectory.versions is not None
@@ -707,11 +820,28 @@ class EmbodiedRolloutResult:
             )
             for i in range(split_size):
                 splited_trajectories[i].forward_inputs = splited_forward_inputs[i]
+        if (
+            all_trajectory.intermediate_obs is not None
+            and len(all_trajectory.intermediate_obs) > 0
+        ):
+            # Per rollout step the buffer holds many observation dicts; to_trajectory() merges
+            # them via stack_list_of_dict_tensor into one dict per step (tensors shaped
+            # [num_intermediate, B, ...]). Splitting here is only on batch B (dim=1); all
+            # intermediate snapshots stay on the leading stacked dimension.
+            splited_per_timestep: list[list[dict[str, Any]]] = [
+                split_dict_to_chunk(obs, split_size, dim=1)
+                for obs in all_trajectory.intermediate_obs
+            ]
+            timesteps = len(splited_per_timestep)
+            for j in range(split_size):
+                splited_trajectories[j].intermediate_obs = [
+                    splited_per_timestep[t][j] for t in range(timesteps)
+                ]
 
         for field_name in all_trajectory.__dataclass_fields__.keys():
             value = getattr(all_trajectory, field_name)
 
-            if value is None or isinstance(value, dict):
+            if value is None or isinstance(value, dict) or isinstance(value, list):
                 continue
 
             if isinstance(value, int) or isinstance(value, str):

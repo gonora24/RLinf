@@ -25,9 +25,12 @@ from typing import Optional
 import numpy as np
 import torch
 
-from rlinf.data.embodied_io_struct import Trajectory
+from rlinf.data.embodied_io_struct import (
+    Trajectory,
+    flatten_intermediate_obs_for_replay_buffer,
+    unflatten_intermediate_obs_from_replay_buffer,
+)
 from rlinf.utils.logging import get_logger
-
 
 def clone_dict_of_tensors(obj):
     if torch.is_tensor(obj):
@@ -514,14 +517,22 @@ class TrajectoryReplayBuffer:
 
             self._save_executor.submit(_flush_metadata)
 
-    def _reshape_flat_for_save(self, value: object, T: int, B: int) -> object:
+    def _reshape_flat_for_save(
+        self, value: object, T: int, B: int, field_name: Optional[str] = None
+    ) -> object:
+        if (
+            field_name == "intermediate_obs"
+            and isinstance(value, dict)
+            and value
+        ):
+            return unflatten_intermediate_obs_from_replay_buffer(value, T, B)
         if isinstance(value, torch.Tensor):
             if value.dim() >= 1 and value.shape[0] == T * B:
                 return value.reshape(T, B, *value.shape[1:])
             return value
         if isinstance(value, dict):
             return {
-                key: self._reshape_flat_for_save(val, T, B)
+                key: self._reshape_flat_for_save(val, T, B, field_name=None)
                 for key, val in value.items()
             }
         return value
@@ -741,6 +752,11 @@ class TrajectoryReplayBuffer:
             for key, tensor in trajectory.next_obs.items():
                 if isinstance(tensor, torch.Tensor) and tensor.dim() >= 2:
                     flat["next_obs"][key] = tensor.reshape(-1, *tensor.shape[2:])
+
+        if trajectory.intermediate_obs:
+            flat["intermediate_obs"] = flatten_intermediate_obs_for_replay_buffer(
+                trajectory.intermediate_obs
+            )
 
         if trajectory.forward_inputs:
             flat["forward_inputs"] = {}
@@ -973,7 +989,9 @@ class TrajectoryReplayBuffer:
                         setattr(
                             trajectory,
                             field_name,
-                            self._reshape_flat_for_save(flat[field_name], T, B),
+                            self._reshape_flat_for_save(
+                                flat[field_name], T, B, field_name=field_name
+                            ),
                         )
                 save_futures.append(
                     self._checkpoint_executor.submit(

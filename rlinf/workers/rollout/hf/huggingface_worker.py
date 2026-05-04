@@ -51,6 +51,7 @@ class MultiStepRolloutWorker(Worker):
         self.actor_weight_src_rank = self._rank % actor_world_size
         self.rollout_epoch = cfg.algorithm.get("rollout_epoch", 1)
         self.collect_transitions = self.cfg.rollout.get("collect_transitions", False)
+        self.collect_intermediate_obs = self.cfg.rollout.get("collect_intermediate_obs", False)
         self.expert_model = None
 
         # Sync weight comm options

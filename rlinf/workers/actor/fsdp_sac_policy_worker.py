@@ -488,154 +488,240 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
         return critic_loss, {"q_data": all_data_q_values.mean().item(), "target_q_values": target_q_values.mean().item()}
 
     def _forward_critic_intra_chunking(self, batch):
-        """Critic loss with temporal consistency for transformer critic.
+        """Intra-chunk critic for **CriticGPT (Toperl)** using segment-style n-step returns.
 
-        Combines two objectives:
+        Batched like ``segments_n_step_return_vf`` (motion-primitive reference),
+        adapted to one chunk per row: ``L`` env steps, ``curr_obs`` /
+        ``intermediate_obs`` / ``next_obs``.
 
-        1. **Full-chunk TD loss** (standard SAC critic loss on the last
-           position Q_L):
-               L_td = (Q_L - [Σ γ^t r_t + γ^L V(s_next)])²
+        - ``future_returns[b, k]``: ``k=0`` → ``agg_h Q_{tar}(s_0, ã)`` (V / MC
+          bootstrap); ``k≥1`` → ``V_{tar}(s_k)`` from the context token at ``s_k``.
+        - ``discount_seq[k]=γ^k``, masked rewards × discounts, strict lower-triangular
+          sum over past columns → add ``future_returns * discount_seq`` →
+          ``n_step_targets`` (same algebra as ``tril_discount_rewards.sum(-1) +
+          discount_return`` in your snippet).
 
-        2. **Temporal consistency loss** across the per-prefix Q-values.
-           Consecutive Q-outputs must satisfy:
-               Q_{N+1} - Q_N  =  γ^N · r_N     for N = 1 … L-1
-           where Q_N = Q(s0, a0, …, a_{N-1}) is the transformer output at
-           position N-1.  The full-chunk TD loss anchors the absolute scale;
-           the consistency loss propagates that signal to every position.
+        Predictions: ``V_φ=[:,0,0]``, ``Q_φ`` prefix ``t`` = ``[:,−1,0]`` for
+        ``t=1..L-1``.  Column ``0`` trains ``V`` vs ``n_step_targets[:,0]``; columns
+        ``1..L-1`` train prefix Q with alive weights.
 
-        Total: L = L_td  +  w · L_consist
-        (w is ``algorithm.consistency_loss_weight``, default 1.0)
-
-        Requires use_dsrl=True and use_transformer_critic=True.
+        Requires ``intermediate_obs``, DSRL, ``use_toperl_critic``.
         """
-        gamma = self.cfg.algorithm.gamma
+        use_crossq = self.cfg.algorithm.get("q_head_type", "default") == "crossq"
+        if use_crossq:
+            raise NotImplementedError(
+                "use_intra_chunking with Cross-Q is not implemented."
+            )
+        if not self.use_dsrl:
+            raise NotImplementedError(
+                "use_intra_chunking currently requires DSRL (use_dsrl=True)."
+            )
+
+        openpi_cfg = self.cfg.actor.model.get("openpi", {})
+        if not openpi_cfg.get("use_toperl_critic", False):
+            raise NotImplementedError(
+                "use_intra_chunking (paper loss) requires use_toperl_critic=True."
+            )
+
+        inter = batch.get("intermediate_obs")
+        if not inter:
+            raise ValueError(
+                "use_intra_chunking requires batch['intermediate_obs']. "
+                "Set rollout.collect_intermediate_obs: true."
+            )
+
+        gamma = float(self.cfg.algorithm.gamma)
         agg_q = self.cfg.algorithm.get("agg_q", "min")
         bootstrap_type = self.cfg.algorithm.get("bootstrap_type", "standard")
-        consistency_weight = self.cfg.algorithm.get(
-            "consistency_loss_weight", 1.0
-        )
+        backup_entropy = self.cfg.algorithm.get("backup_entropy", True)
 
         curr_obs = batch["curr_obs"]
         next_obs = batch["next_obs"]
-        actions = batch["actions"]  # [B, L, action_dim]
-        rewards = batch["rewards"].to(self.torch_dtype)  # [B, L]
-        terminations = batch["terminations"]  # [B, L]
+        actions = batch["actions"]
+        rewards = batch["rewards"].to(self.torch_dtype)
+        terminations = batch["terminations"]
 
-        B, L = actions.shape[0], actions.shape[1]
-        num_action_chunks = self.cfg.actor.model.get("num_action_chunks", 1)
-        discount = gamma**num_action_chunks
+        bsz, L, _ = actions.shape
 
-        rewards_for_bootstrap = rewards[:, 0:1].to(self.torch_dtype)
-        # alive_mask = (~terminations).cumprod(dim=1).to(self.torch_dtype)  # [B, L]
-        # rewards = rewards * alive_mask
+        k_inter = None
+        for _v in inter.values():
+            if isinstance(_v, torch.Tensor) and _v.dim() >= 2:
+                k_inter = int(_v.shape[1])
+                break
+        if k_inter is None:
+            raise ValueError("intermediate_obs has no tensor leaves to read K from.")
+        if k_inter != L - 1:
+            raise ValueError(
+                f"Expected intermediate_obs dim-1 K=L-1={L - 1} for L={L} chunk steps, "
+                f"got K={k_inter}."
+            )
 
-        # ---- Full-chunk discounted reward sum ----
-        gamma_powers = torch.pow(
-            gamma,
-            torch.arange(L, device=self.device, dtype=torch.float32),
-        )  # [L]: γ^0 … γ^{L-1}
-        rewards_for_bootstrap = (
-            (rewards_for_bootstrap * gamma_powers.unsqueeze(0))
-            .sum(dim=-1, keepdim=True)
-            .to(self.torch_dtype)
-        )  # [B, 1]
+        def _obs_after_k(k: int) -> dict:
+            if k == 0:
+                return curr_obs
+            if k < N:
+                o: dict = {}
+                for key, val in inter.items():
+                    if isinstance(val, torch.Tensor):
+                        o[key] = val[:, k - 1, ...]
+                    else:
+                        o[key] = val
+                for key, val in curr_obs.items():
+                    if key not in o:
+                        o[key] = val
+                return o
+            assert k == N # last obs is next obs
+            return next_obs
 
-        # ---- Bootstrap V(s_next) from target network ----
+        def _prefix_weight(n: int) -> torch.Tensor:
+            if n <= 1:
+                return torch.ones(bsz, device=terminations.device, dtype=dtype)
+            return torch.prod((~terminations[:, : n - 1]).to(dtype=dtype), dim=1)
+
+        pi_kw: dict = {"train": True}
+
+        dsrl_q = {"train": True}
+        dsrl_prefix = {"train": True, "return_all_prefixes": True}
+        L = L + 1 # we have next obs which makes the total number of steps K+1 -> true L
+        N = L - 1 # we have next obs which makes the total number of actions L-1 -> true N
+        dtype = self.torch_dtype
+        device = self.device
+
+        # Keep masks in model dtype; .float() is FP32 and breaks FSDP bf16 backward.
+        alive_chunk = (~terminations.any(dim=-1)).to(dtype=dtype)
+        # ----- future_returns [B, N]: R_k bootstrap terms (no grad) -----
+        future_returns = torch.zeros(bsz, N, device=device, dtype=dtype)
         with torch.no_grad():
-            next_actions, next_log_pi, _ = self.model(
-                forward_type=ForwardType.SAC, obs=next_obs, train=True
+            pi_a, log_pi, _ = self.model(
+                forward_type=ForwardType.SAC,
+                obs=curr_obs,
+                **pi_kw,
             )
-            if next_log_pi.ndim == 1:
-                next_log_pi = next_log_pi.unsqueeze(-1)
-            next_log_pi = next_log_pi.sum(dim=-1, keepdim=True)
-
-            all_qf_next_target = self.target_model(
+            if log_pi.ndim == 1:
+                log_pi = log_pi.unsqueeze(-1)
+            log_pi = log_pi.sum(dim=-1, keepdim=True)
+            q_pi_tar = self.target_model(
                 forward_type=ForwardType.SAC_Q,
-                obs=next_obs,
-                actions=next_actions,
+                obs=curr_obs,
+                actions=pi_a,
                 shared_feature=None,
-                train=True,
+                **dsrl_q,
             )
-
-            if self.critic_subsample_size > 0:
-                sample_idx = torch.randint(
+            if self.critic_subsample_size > 0 and q_pi_tar.shape[-1] > 1:
+                idx = torch.randint(
                     0,
-                    all_qf_next_target.shape[-1],
+                    q_pi_tar.shape[-1],
                     (self.critic_subsample_size,),
                     generator=self.critic_sample_generator,
-                    device=self.device,
+                    device=device,
                 )
-                all_qf_next_target = all_qf_next_target.index_select(
-                    dim=-1, index=sample_idx
-                )
-
+                q_pi_tar = q_pi_tar.index_select(dim=-1, index=idx)
             if agg_q == "min":
-                qf_next_target, _ = torch.min(
-                    all_qf_next_target, dim=1, keepdim=True
-                )
+                q_pi_tar, _ = torch.min(q_pi_tar, dim=-1, keepdim=True)
             elif agg_q == "mean":
-                qf_next_target = torch.mean(
-                    all_qf_next_target, dim=1, keepdim=True
-                )
-
-            if self.cfg.algorithm.get("backup_entropy", True):
-                qf_next_target = (
-                    qf_next_target - self.entropy_temp.alpha * next_log_pi
-                ).to(self.torch_dtype)
-
-            if bootstrap_type == "always":
-                target_q_values = (
-                    rewards_for_bootstrap + discount * qf_next_target
-                )
-            elif bootstrap_type == "standard":
-                target_q_values = (
-                    rewards_for_bootstrap
-                    + (~(terminations.any(dim=-1, keepdim=True)))
-                    * discount
-                    * qf_next_target
-                )
+                q_pi_tar = torch.mean(q_pi_tar, dim=-1, keepdim=True)
             else:
-                raise NotImplementedError(f"{bootstrap_type=} is not supported!")
-            # target_q_values: [B, 1]
+                raise NotImplementedError(f"{agg_q=} is not supported!")
+            if backup_entropy:
+                q_pi_col0 = (q_pi_tar - self.entropy_temp.alpha * log_pi).squeeze(-1)
+            else:
+                q_pi_col0 = q_pi_tar.squeeze(-1)
+            q_pi_col0 = q_pi_col0.to(dtype=dtype)
 
-        # ---- Per-prefix Q-values from the transformer critic ----
-        all_prefix_q = self.model(
+            for j in range(1, L):
+                q_tar_sj = self.target_model(
+                    forward_type=ForwardType.SAC_Q,
+                    obs=_obs_after_k(j),
+                    actions=actions,
+                    shared_feature=None,
+                    **dsrl_prefix,
+                )
+                vj = q_tar_sj[:, 0, 0]
+                if bootstrap_type == "always":
+                    boot_j = torch.ones(bsz, device=device, dtype=dtype)
+                elif bootstrap_type == "standard":
+                    boot_j = (~terminations[:, j - 1]).to(dtype=dtype) * alive_chunk
+                else:
+                    raise NotImplementedError(f"{bootstrap_type=} is not supported!")
+                future_returns[:, j-1] = (vj * boot_j).to(dtype=dtype)
+
+        # ----- N-step targets: tril discounted rewards + γ^k R_k -----
+        rw_mask = (~terminations).cumprod(dim=1).bool()
+        seg_r = (rewards * rw_mask.to(dtype=rewards.dtype)).to(dtype=dtype)
+
+        discount_idx = torch.arange(L, device=device, dtype=torch.float32)
+        discount_seq = torch.pow(
+            torch.tensor(gamma, device=device, dtype=torch.float32), discount_idx
+        ).to(dtype=dtype)
+
+        seg_discount_r = seg_r * discount_seq[0:N]
+        reward_tril_mask = torch.tril(
+            torch.ones(N, N, device=device, dtype=dtype), diagonal=0
+        )
+        tril_discount = (
+            seg_discount_r.unsqueeze(1).expand(-1, N, -1) * reward_tril_mask.view(1, N, N)
+        ).sum(dim=-1)
+        discount_return = future_returns * discount_seq[1:L] 
+        n_step_targets = tril_discount + discount_return
+
+        # ----- online preds vs targets -----
+        q_s0_full = self.model(
             forward_type=ForwardType.SAC_Q,
             obs=curr_obs,
             actions=actions,
-            return_all_prefixes=True,
-            train=True,
-        )  # [B, L, out_dim]
+            shared_feature=None,
+            **dsrl_prefix,
+        )
+        v_online = q_s0_full[:, 0, 0].unsqueeze(-1)
+        v_target = q_pi_col0.unsqueeze(-1).to(dtype=v_online.dtype)
+        v_loss = F.mse_loss(v_online, v_target)
 
-        # ---- 1) Full-chunk TD loss (last position) ----
-        q_full = all_prefix_q[:, -1, :]  # [B, out_dim]
-        target_q_values = target_q_values.to(dtype=q_full.dtype)
-        td_loss = F.mse_loss(q_full, target_q_values.expand_as(q_full))
+        # Per prefix length t: batch-weighted MSE, then mean over t (equal weight per horizon).
+        prefix_step_means: list[torch.Tensor] = []
+        q_sum = 0.0
+        tgt_sum = 0.0
+        n_stats = 0
 
-        # ---- 2) Temporal consistency loss ----
-        # Q_{N+1} - Q_N should equal γ^N · r_N  (for N = 1 … L-1)
-        # In position indices: pos[n] - pos[n-1] = γ^n · r_n  (n = 1 … L-1)
-        q_diffs = (
-            all_prefix_q[:, 1:, :] - all_prefix_q[:, :-1, :]
-        )  # [B, L-1, out_dim]
+        for t in range(1, L):
+            w_t = torch.prod((~terminations[:, : t]).to(dtype=dtype), dim=1)
+            # w_t = _prefix_weight(t) # if the episode terminated before t, the weight is 0
+            if not bool(w_t.any()):
+                continue
+            q_raw = self.model(
+                forward_type=ForwardType.SAC_Q,
+                obs=curr_obs,
+                actions=actions[:, :t, :].contiguous(),
+                **dsrl_prefix,
+            )
+            q_pred = q_raw[:, -1, 0].unsqueeze(-1) # last q-value
+            target_t = n_step_targets[:, t-1].unsqueeze(-1)
+            target_t = target_t.to(dtype=q_pred.dtype)
+            td = F.mse_loss(q_pred, target_t, reduction="none")
+            w = w_t.to(device=td.device, dtype=td.dtype)
+            denom = w.sum().clamp_min(torch.tensor(1e-8, device=td.device, dtype=td.dtype))
+            step_mean = (td * w.unsqueeze(-1)).sum() / denom
+            prefix_step_means.append(step_mean)
+            n_stats += 1
+            q_sum += float(
+                (q_pred.detach().squeeze(-1) * w).sum() / (w.sum() + 1e-8)
+            )
+            tgt_sum += float(
+                (target_t.squeeze(-1) * w).sum() / (w.sum() + 1e-8)
+            )
 
-        expected_diffs = (
-            gamma_powers[1:].unsqueeze(0) * rewards[:, 1:]
-        ).to(
-            dtype=q_diffs.dtype
-        )  # [B, L-1]
-        expected_diffs = expected_diffs.unsqueeze(-1).expand_as(q_diffs)
+        if prefix_step_means:
+            prefix_loss = torch.stack(prefix_step_means).mean()
+        else:
+            prefix_loss = torch.zeros((), device=device, dtype=dtype)
 
-        consistency_loss = F.mse_loss(q_diffs, expected_diffs.detach())
-
-        critic_loss = td_loss + consistency_weight * consistency_loss
-
+        critic_loss = prefix_loss + v_loss
         metrics = {
-            "q_data": q_full.mean().item(),
-            "target_q_values": target_q_values.mean().item(),
-            "td_loss": td_loss.item(),
-            "consistency_loss": consistency_loss.item(),
-            "critic_loss": critic_loss.item(),
+            "q_data": q_sum / max(n_stats, 1),
+            "target_q_values": tgt_sum / max(n_stats, 1),
+            "intrachunk_prefix_steps": float(max(L - 1, 1)),
+            "prefix_critic_loss": float(prefix_loss.item()),
+            "v_align_critic_loss": float(v_loss.item()),
+            "critic_loss": float(critic_loss.item()),
         }
         return critic_loss, metrics
 

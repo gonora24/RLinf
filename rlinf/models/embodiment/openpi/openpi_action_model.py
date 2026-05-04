@@ -29,6 +29,7 @@ from openpi.models_pytorch.pi0_pytorch import PI0Pytorch, make_att_2d_masks
 from rlinf.models.embodiment.base_policy import BasePolicy, ForwardType
 from rlinf.models.embodiment.modules.critic_transformer import CriticGPT, SeqQFuncTorch
 from rlinf.models.embodiment.modules.explore_noise_net import ExploreNoiseNet
+from rlinf.models.embodiment.modules.transformer_actor import AutoregressiveActionTransformer
 from rlinf.models.embodiment.modules.value_head import ValueHead
 from rlinf.utils.logging import get_logger
 from rlinf.utils.nested_dict_process import copy_dict_tensor
@@ -83,6 +84,7 @@ class OpenPi0Config(Pi0Config):
     use_toperl_critic: bool = False  # use topErl critic for DSRL
     action_magnitude: float = 1.0  # action magnitude for DSRL
     use_state_encoder: bool = False  # use state encoder for DSRL
+    use_actor_transformer: bool = False  # use actor transformer for DSRL
 
     # ===== NFT-specific parameters =====
     is_nft: bool = False
@@ -209,16 +211,31 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
                 output_dim = self.config.dsrl_action_noise_dim
                 log_std_min=-20
                 log_std_max=2
-            self.dsrl_action_noise_net = GaussianPolicy(
-                input_dim=dsrl_input_dim,
-                output_dim=output_dim,
-                hidden_dims=self.config.dsrl_hidden_dims,
-                log_std_min=log_std_min,
-                log_std_max=log_std_max,
-                low=-self.config.action_magnitude,
-                high=self.config.action_magnitude,
-                action_horizon=self.config.action_horizon,
-            ).to(dtype=_dsrl_dtype)
+            if self.config.use_actor_transformer:
+                self.dsrl_action_noise_net = AutoregressiveActionTransformer(
+                    state_dim=self.config.dsrl_state_latent_dim,
+                    image_dim=self.config.dsrl_image_latent_dim,
+                    action_dim=self.config.dsrl_action_noise_dim,
+                    chunk_size=self.config.action_horizon,
+                    d_model=self.config.dsrl_hidden_dims[-1],
+                    n_layers=3,
+                    n_heads=8,
+                    log_std_min=log_std_min,
+                    log_std_max=log_std_max,
+                    low=-self.config.action_magnitude,
+                    high=self.config.action_magnitude,
+                ).to(dtype=_dsrl_dtype)
+            else:
+                self.dsrl_action_noise_net = GaussianPolicy(
+                    input_dim=dsrl_input_dim,
+                    output_dim=output_dim,
+                    hidden_dims=self.config.dsrl_hidden_dims,
+                    log_std_min=log_std_min,
+                    log_std_max=log_std_max,
+                    low=-self.config.action_magnitude,
+                    high=self.config.action_magnitude,
+                    action_horizon=self.config.action_horizon,
+                ).to(dtype=_dsrl_dtype)
 
             self.actor_image_encoder = LightweightImageEncoder64(
                 num_images=1,
@@ -1267,16 +1284,19 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
                    1. {"images": list of tensors, "states": tensor} - internal format
                    2. {"main_images": tensor, "wrist_images": tensor, "states": tensor} - env format
             data: Dictionary containing observations (legacy, for backward compatibility).
-            actions: [B, action_dim] or [B, action_horizon, action_dim]
+            actions: [B, action_dim] or [B, action_horizon, action_dim]. With
+                ``use_toperl_critic``, CriticGPT returns ``[B, T+1, d]`` when
+                ``return_all_prefixes=True``; index ``0`` is V(s) (context token
+                only under masked attention), indices ``1:`` are per-action Q.
             detach_encoder: Whether to detach encoder gradients.
             train: Whether to use data augmentation.
             return_all_prefixes: When True and using transformer critic, return
-                per-prefix Q-values [B, T, out_dim] instead of only the last
-                position [B, out_dim].  Used by intra-chunk N-step targets.
+                full token sequence [B, T+1, out_dim] (Toperl) or [B, T, out_dim]
+                (SeqQFunc). When False, return only the last action Q (or q_head).
 
         Returns:
-            q_values: [B, num_q_heads] when return_all_prefixes=False,
-                      [B, T, out_dim] when return_all_prefixes=True (transformer critic only).
+            q_values: [B, num_q_heads] when return_all_prefixes=False, or the full
+                token sequence when return_all_prefixes=True (shape depends on critic).
         """
         if not self.config.use_dsrl:
             raise ValueError("sac_q_forward called but use_dsrl=False")
@@ -1286,6 +1306,8 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
             obs = data.get("obs", data) if data is not None else kwargs.get("obs", {})
         if actions is None:
             actions = kwargs.get("actions")
+        if actions is None:
+            raise ValueError("sac_q_forward requires `actions`; pass a dummy chunk if needed.")
 
         # Handle two obs formats:
         # Format 1 (internal): {"images": [...], "states": ...}

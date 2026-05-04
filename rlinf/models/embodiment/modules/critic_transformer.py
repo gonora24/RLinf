@@ -300,6 +300,6 @@ class CriticGPT(nn.Module):
         # -> Shape [*add_dim, num_actions + 1, 1] -> [*add_dim, num_actions + 1]
         x = self.output_layer(x)  # value is dimensionless
 
-        # v = x[..., ..., 0]  # shape [*add_dim]
-        # q = x[..., ..., 1:]  # shape [*add_dim, num_actions]
+        # v = x[..., 0, :]  # shape [*add_dim, num_actions + 1, 1]
+        # q = x[..., 1:, :]  # shape [*add_dim, num_actions + 1, 1]
         return x

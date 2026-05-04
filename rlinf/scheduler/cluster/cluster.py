@@ -280,7 +280,6 @@ class Cluster:
                 address="auto",
                 logging_level=Cluster.LOGGING_LEVEL,
                 namespace=Cluster.NAMESPACE,
-                num_cpus=num_cpus,
             )
         except ConnectionError:
             local_ray_init_kwargs = {

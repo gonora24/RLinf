@@ -56,6 +56,7 @@ class EnvWorker(Worker):
 
         self.collect_transitions = self.cfg.rollout.get("collect_transitions", False)
         self.collect_prev_infos = self.cfg.rollout.get("collect_prev_infos", True)
+        self.collect_intermediate_obs = self.cfg.rollout.get("collect_intermediate_obs", False)
         self.stage_num = self.cfg.rollout.pipeline_stage_num
 
         # Env configurations
@@ -276,6 +277,8 @@ class EnvWorker(Worker):
         )
         if isinstance(obs_list, (list, tuple)):
             extracted_obs = obs_list[-1] if obs_list else None
+            if self.collect_intermediate_obs:
+                extracted_intermediate_obs = obs_list[:-1]
         if isinstance(infos_list, (list, tuple)):
             infos = infos_list[-1] if infos_list else None
         chunk_dones = torch.logical_or(chunk_terminations, chunk_truncations)
@@ -307,6 +310,7 @@ class EnvWorker(Worker):
 
         env_output = EnvOutput(
             obs=extracted_obs,
+            intermediate_obs=extracted_intermediate_obs if self.collect_intermediate_obs else None,
             final_obs=infos["final_observation"]
             if "final_observation" in infos
             else None,
@@ -745,6 +749,10 @@ class EnvWorker(Worker):
                         )
                         self.rollout_results[stage_id].append_transitions(
                             curr_obs, next_obs
+                        )
+                    if self.collect_intermediate_obs:
+                        self.rollout_results[stage_id].append_intermediate_obs(
+                            env_output.intermediate_obs
                         )
 
                     env_outputs[stage_id] = env_output
