@@ -58,6 +58,7 @@ algorithm:
   backup_entropy: False
   critic_subsample_size: 0
   critic_actor_ratio: 1
+  chunk_reward: False
 
   bootstrap_type: standard
   gamma: 0.999
