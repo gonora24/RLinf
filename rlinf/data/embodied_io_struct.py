@@ -35,16 +35,16 @@ def flatten_intermediate_obs_for_replay_buffer(
     """Lay out intermediate observations for flat replay rows.
 
     ``per_rollout_step_obs`` has length ``T`` (rollout steps); each step is a dict of
-    tensors shaped ``[K, B, …]`` where ``K`` is the number of intermediate frames in
-    that chunk (same row order as ``curr_obs`` / ``next_obs`` after their ``T×B`` flatten).
+    tensors shaped ``[B, K, …]`` where ``B`` is the batch (env) dimension and ``K`` is
+    the number of intermediate frames in that chunk.
 
-    Stacks to ``[T, K, B, …]`` at each leaf, then ``transpose(1, 2) → [T, B, K, …]`` and
-    ``reshape(-1, K, …)`` so the leading dimension is ``T*B`` and dimension ``1`` stays
-    ``K``. A sample row ``i`` then has shape ``[K, …]`` (e.g. ``[4, H, W, C]`` without batch
-    if you index with a single env row, or ``[4, b, …]`` inside the stored layout).
+    Stacks to ``[T, B, K, …]`` at each leaf then ``reshape(-1, K, …)`` so the leading
+    dimension is ``T*B`` and dimension ``1`` stays ``K``.  Because the per-step tensors
+    are already in ``[B, K, …]`` order the stack result is already contiguous and no
+    extra copy is needed.
 
     Args:
-        per_rollout_step_obs: Length-``T`` list of observation dicts shaped ``[K, B, …]``.
+        per_rollout_step_obs: Length-``T`` list of observation dicts shaped ``[B, K, …]``.
 
     Returns:
         Nested dict with the same keys as one step, leaf tensors ``[T*B, K, …]``.
@@ -52,23 +52,23 @@ def flatten_intermediate_obs_for_replay_buffer(
     if not per_rollout_step_obs:
         return {}
 
-    merged = stack_list_of_dict_tensor(per_rollout_step_obs)
+    merged = stack_list_of_dict_tensor(per_rollout_step_obs)  # [T, B, K, ...]
 
-    def tkb_to_tb_k(node: Any) -> Any:
+    def tbk_to_tb_k(node: Any) -> Any:
         if isinstance(node, torch.Tensor):
             if node.dim() < 3:
                 raise ValueError(
                     "intermediate_obs tensors must be at least "
-                    f"[T,K,B,...]; got shape={tuple(node.shape)}"
+                    f"[T,B,K,...]; got shape={tuple(node.shape)}"
                 )
-            k = int(node.shape[1])
-            x = node.transpose(1, 2).contiguous()
-            return x.reshape(-1, k, *x.shape[3:])
+            # stack_list_of_dict_tensor creates a contiguous tensor, so reshape
+            # is a free view — no extra allocation needed.
+            return node.reshape(-1, *node.shape[2:])  # [T*B, K, ...]
         if isinstance(node, dict):
-            return {key: tkb_to_tb_k(val) for key, val in node.items()}
+            return {key: tbk_to_tb_k(val) for key, val in node.items()}
         return node
 
-    return tkb_to_tb_k(merged)
+    return tbk_to_tb_k(merged)
 
 
 def _index_leaves_along_t(node: Any, t: int) -> Any:
@@ -86,13 +86,13 @@ def unflatten_intermediate_obs_from_replay_buffer(
 ) -> list[dict[str, Any]]:
     """Inverse of :func:`flatten_intermediate_obs_for_replay_buffer` (e.g. checkpoint save).
 
-    Rebuilds the length-``T`` list of per-step dicts with leaves ``[K, B, …]`` from stored
+    Rebuilds the length-``T`` list of per-step dicts with leaves ``[B, K, …]`` from stored
     ``[T*B, K, …]`` layout.
     """
     if not flat_nested:
         return []
 
-    def tb_k_to_tkb(node: Any) -> Any:
+    def tb_k_to_tbk(node: Any) -> Any:
         if isinstance(node, torch.Tensor):
             if node.shape[0] != T * B:
                 raise ValueError(
@@ -102,14 +102,13 @@ def unflatten_intermediate_obs_from_replay_buffer(
                 raise ValueError(
                     f"Expected leaves [T*B, K, ...], got shape={tuple(node.shape)}"
                 )
-            x = node.reshape(T, B, *node.shape[1:])
-            return x.transpose(1, 2).contiguous()
+            return node.reshape(T, B, *node.shape[1:])  # [T, B, K, ...]
         if isinstance(node, dict):
-            return {key: tb_k_to_tkb(val) for key, val in node.items()}
+            return {key: tb_k_to_tbk(val) for key, val in node.items()}
         return node
 
-    merged_tkb = tb_k_to_tkb(flat_nested)
-    return [_index_leaves_along_t(merged_tkb, t) for t in range(T)]
+    merged_tbk = tb_k_to_tbk(flat_nested)
+    return [_index_leaves_along_t(merged_tbk, t) for t in range(T)]
 
 
 def get_model_weights_id(versions: torch.Tensor) -> str:
@@ -779,10 +778,20 @@ class EmbodiedRolloutResult:
                 trajectory.next_obs[key] = trajectory.next_obs[key].cpu().contiguous()
 
         if len(self.intermediate_obs) > 0:
-            trajectory.intermediate_obs = [stack_list_of_dict_tensor(obs) for obs in self.intermediate_obs]
-            for i in range(len(trajectory.intermediate_obs)):
-                for key in trajectory.intermediate_obs[i].keys():
-                    trajectory.intermediate_obs[i][key] = trajectory.intermediate_obs[i][key].cpu().contiguous()
+            # stack_list_of_dict_tensor stacks K items of [B, ...] → [K, B, ...].
+            # Transpose to [B, K, ...] here (per-step, small copy) so that
+            # flatten_intermediate_obs_for_replay_buffer can later stack T steps
+            # and reshape without an additional contiguous() copy.
+            trajectory.intermediate_obs = []
+            for obs in self.intermediate_obs:
+                stacked = stack_list_of_dict_tensor(obs)  # [K, B, ...]
+                trajectory.intermediate_obs.append(
+                    {
+                        key: val.transpose(0, 1).contiguous()
+                        for key, val in stacked.items()
+                        if isinstance(val, torch.Tensor)
+                    }
+                )
 
         trajectory.model_weights_id = get_model_weights_id(
             trajectory.versions
@@ -824,12 +833,12 @@ class EmbodiedRolloutResult:
             all_trajectory.intermediate_obs is not None
             and len(all_trajectory.intermediate_obs) > 0
         ):
-            # Per rollout step the buffer holds many observation dicts; to_trajectory() merges
-            # them via stack_list_of_dict_tensor into one dict per step (tensors shaped
-            # [num_intermediate, B, ...]). Splitting here is only on batch B (dim=1); all
-            # intermediate snapshots stay on the leading stacked dimension.
+            # Per rollout step the buffer holds one dict per step with tensors shaped
+            # [B, K, ...] (B first after the transpose in to_trajectory).  Split along
+            # the batch dimension (dim=0) so each worker's slice keeps all K intermediate
+            # frames per sample.
             splited_per_timestep: list[list[dict[str, Any]]] = [
-                split_dict_to_chunk(obs, split_size, dim=1)
+                split_dict_to_chunk(obs, split_size, dim=0)
                 for obs in all_trajectory.intermediate_obs
             ]
             timesteps = len(splited_per_timestep)

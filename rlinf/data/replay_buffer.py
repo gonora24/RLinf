@@ -95,13 +95,28 @@ class TrajectoryCache:
                 buffer[key] = value
         return buffer
 
-    def _insert_into_buffer(self, trajectory: dict, buffer: dict, start: int) -> None:
+    def _insert_into_buffer(
+        self,
+        trajectory: dict,
+        buffer: dict,
+        start: int,
+        path: str = "",
+    ) -> None:
         for key, value in trajectory.items():
+            full_key = f"{path}.{key}" if path else key
             if isinstance(value, torch.Tensor):
                 end = start + value.shape[0]
+                target = buffer[key][start:end]
+                if target.shape != value.shape:
+                    raise RuntimeError(
+                        "Replay buffer shape mismatch at key "
+                        f"'{full_key}': target slice shape={tuple(target.shape)}, "
+                        f"value shape={tuple(value.shape)}, start={start}, end={end}, "
+                        f"buffer field shape={tuple(buffer[key].shape)}"
+                    )
                 buffer[key][start:end] = value
             elif isinstance(value, dict):
-                self._insert_into_buffer(value, buffer[key], start)
+                self._insert_into_buffer(value, buffer[key], start, full_key)
             else:
                 buffer[key] = value
 
@@ -670,7 +685,13 @@ class TrajectoryReplayBuffer:
         else:
             cached_mask = torch.zeros_like(traj_ids_tensor, dtype=torch.bool)
 
-        # 1) Cache hits: gather from cache buffer.
+        # Hits and misses are placed into contiguous slices of the batch so that
+        # _fill_batch_slice can use torch.index_select(out=...) directly into the
+        # pre-allocated batch tensor.  This avoids both the intermediate tensor
+        # allocation and the scatter write that the old approach required.
+        batch_offset = 0
+
+        # 1) Cache hits: gather from cache buffer → batch[0 : num_hits].
         if torch.any(cached_mask):
             cache_buffer = cache.get_buffer() if cache is not None else None
             slot_len = cache.get_slot_length() if cache is not None else None
@@ -684,11 +705,16 @@ class TrajectoryReplayBuffer:
                 batch_indices = batch_indices_tensor[cached_mask]
                 if batch is None:
                     batch = self._init_batch_from_buffer(cache_buffer, num_chunks)
-                self._fill_batch_from_buffer_indices(
-                    batch, cache_buffer, buffer_indices, batch_indices
-                )
+                # self._fill_batch_from_buffer_indices(
+                #     batch, cache_buffer, buffer_indices, batch_indices
+                # )
+                num_hits = len(buffer_indices)
+                self._fill_batch_slice(batch, cache_buffer, buffer_indices, batch_offset)
+                # # Sort so that reads from the cache buffer are sequential.
+                # buffer_indices = buffer_indices[buffer_indices.argsort()]
+                batch_offset += num_hits
 
-        # 2) Cache misses: load all, concat, then gather once.
+        # 2) Cache misses: load all, concat, then gather once → batch[num_hits : N].
         miss_mask = ~cached_mask
         if torch.any(miss_mask):
             miss_traj_ids = torch.unique(traj_ids_tensor[miss_mask]).tolist()
@@ -714,9 +740,12 @@ class TrajectoryReplayBuffer:
             miss_local = local_sample_indices[miss_mask]
             miss_buffer_indices = miss_offsets + miss_local
             miss_batch_indices = batch_indices_tensor[miss_mask]
-            self._fill_batch_from_buffer_indices(
-                batch, concat_flat, miss_buffer_indices, miss_batch_indices
-            )
+            # self._fill_batch_from_buffer_indices(
+            #     batch, concat_flat, miss_buffer_indices, miss_batch_indices
+            # )
+            # # Sort so that reads from concat_flat are sequential.
+            miss_buffer_indices = miss_buffer_indices[miss_buffer_indices.argsort()]
+            self._fill_batch_slice(batch, concat_flat, miss_buffer_indices, batch_offset)
 
         return batch if batch is not None else {}
 
@@ -822,6 +851,31 @@ class TrajectoryReplayBuffer:
                     batch[key] = nested_batch
         return batch
 
+    def _fill_batch_slice(
+        self,
+        batch: dict,
+        buffer: dict,
+        buffer_indices: torch.Tensor,
+        batch_start: int,
+    ) -> None:
+        """Fill batch[batch_start : batch_start+n] directly from buffer.
+
+        Uses ``torch.index_select`` with the ``out`` parameter so that the
+        selected rows are written straight into the pre-allocated batch slice,
+        avoiding both the intermediate tensor allocation and the subsequent
+        scatter write that the old ``index_select`` + fancy-index-assign pattern
+        required.  ``buffer_indices`` should be sorted so that reads from
+        ``buffer`` are sequential (cache-friendly).
+        """
+        n = len(buffer_indices)
+        for key, value in buffer.items():
+            if isinstance(value, torch.Tensor):
+                torch.index_select(
+                    value, 0, buffer_indices, out=batch[key][batch_start : batch_start + n]
+                )
+            elif isinstance(value, dict):
+                self._fill_batch_slice(batch[key], value, buffer_indices, batch_start)
+
     def _fill_batch_from_buffer_indices(
         self,
         batch: dict,
@@ -848,6 +902,9 @@ class TrajectoryReplayBuffer:
         for key, value in buffer.items():
             if isinstance(value, torch.Tensor):
                 batch[key][batch_indices] = value.index_select(0, buffer_indices)
+                # torch.index_select(
+                #     value, 0, buffer_indices, out=batch[key][batch_indices]
+                # )
             elif isinstance(value, dict):
                 self._fill_batch_from_buffer_indices_sorted(
                     batch[key], value, buffer_indices, batch_indices
