@@ -22,7 +22,7 @@ runner:
   logger:
     log_path: "../results"
     project_name: rlinf
-    experiment_name: "metaworld_50_task2trial0_pi0_toperlcritic_actortransformer_dsrlloss" #"metaworld_50_ppo_openpi_pi05"
+    experiment_name: "metaworld_50_task2trial0_pi0_secfunccritic_actortransformer_8layers_contextstarttoken_dsrlloss" #"metaworld_50_ppo_openpi_pi05"
     logger_backends: ["wandb"] # wandb, swanlab
 
   max_epochs: 10000
@@ -58,8 +58,7 @@ algorithm:
   actor_agg_q: mean
   backup_entropy: False
   critic_subsample_size: 0
-  critic_actor_ratio: 2 #1
-  consistency_loss_weight: 0.5 #1.0
+  critic_actor_ratio: 1 #1
   use_intra_chunking: False  # consistency loss is only supported for intra-chunking
   use_sequential_sampling: True
 
@@ -172,18 +171,19 @@ actor:
       use_dsrl: True
       dsrl_state_dim: 4
       dsrl_action_noise_dim: 32
-      dsrl_num_q_heads: 2 #10
+      dsrl_num_q_heads: 1 #10
       dsrl_image_latent_dim: 64
       dsrl_state_latent_dim: 64
-      dsrl_hidden_dims: [512, 512, 512] #[128, 128, 128]
+      dsrl_hidden_dims: [256, 256, 256] #[128, 128, 128]
       train_expert_only: True
       detach_critic_input: True
       noise_method: "reinflow"
       use_action_chunking: True
       action_magnitude: 1.0
       use_state_encoder: True
-      use_transformer_critic: False # state encoder has to be true for transformer critic
-      use_toperl_critic: True
+      use_transformer_critic: True # state encoder has to be true for transformer critic
+      use_toperl_critic: False
+      critic_num_layers: 8 # 10 worked good before although pretty big
       use_actor_transformer: True
       
 
@@ -192,7 +192,7 @@ actor:
     adam_beta1: 0.9
     adam_beta2: 0.96
     adam_eps: 1.0e-08
-    clip_grad: 35.0 #3.5
+    clip_grad: 30.0 #3.5
 
   critic_optim:
     lr: 1.0e-4 #3.0e-4

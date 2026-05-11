@@ -76,6 +76,7 @@ algorithm:
 
   replay_buffer:
     enable_cache: True
+    enable_preload: True
     cache_size: 100 #15000
     sample_window_size: 100 #15000
     min_buffer_size: 30 # should match train_actor_steps, otherwise critic warm up
@@ -119,7 +120,7 @@ env:
   eval:
     task_id: 50
     total_num_envs: 4 #16 with eval rollout epoch essentially lowered for faster training
-    auto_reset: True
+    auto_reset: False
     use_rel_reward: False
     use_step_penalty: True
     ignore_terminations: True

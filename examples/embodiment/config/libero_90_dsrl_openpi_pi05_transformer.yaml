@@ -32,7 +32,7 @@ runner:
   val_check_interval: -1
   save_interval: -1
 
-  resume_dir: null #"/pfs/work9/workspace/scratch/ka_eu3660-rlinf_tmp/logs/20260404-00:53:32-libero_object_dsrl_openpi_pi05/libero_object_task0_dsrl_openpi_pi05/checkpoints/global_step_80"
+  resume_dir: null
   ckpt_path: null
 
 algorithm:
@@ -79,12 +79,12 @@ algorithm:
     enable_preload: True
     cache_size: 100 #200 #15000
     sample_window_size: 100 #200 #15000
-    min_buffer_size: 3
+    min_buffer_size: 30
     auto_save: False
 
   target_update_freq: 1
   target_update_type: all
-  train_actor_steps: 3
+  train_actor_steps: 30
 
   filter_rewards: False
   rewards_lower_bound: 0.1
@@ -138,7 +138,7 @@ rollout:
   group_name: "RolloutGroup"
   generation_backend: "huggingface"
   recompute_logprobs: False
-  unnorm_key: libero_10
+  unnorm_key: libero_90
   enable_offload: False
   pipeline_stage_num: 1
   collect_transitions: True
@@ -168,10 +168,10 @@ actor:
       use_dsrl: True
       dsrl_state_dim: 8
       dsrl_action_noise_dim: 32
-      dsrl_num_q_heads: 2 # not implemented in top erl critic
+      dsrl_num_q_heads: 1 # not implemented in top erl critic
       dsrl_image_latent_dim: 64
       dsrl_state_latent_dim: 64
-      dsrl_hidden_dims: [256, 256, 256] #[128, 128, 128]
+      dsrl_hidden_dims: [128, 128, 128] #[128, 128, 128]
       train_expert_only: True
       detach_critic_input: True
       noise_method: "reinflow"
@@ -181,7 +181,7 @@ actor:
       use_transformer_critic: True
       use_toperl_critic: False
       use_actor_transformer: False
-      critic_num_layers: 8 # 10 worked good before although pretty big
+      critic_num_layers: 10 # 10 worked good before although pretty big
 
   optim:
     lr: 1.0e-4
