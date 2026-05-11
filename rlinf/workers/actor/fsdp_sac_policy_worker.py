@@ -345,6 +345,10 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
         if use_intra_chunking:
             return self._forward_critic_intra_chunking(batch)
 
+        use_true_bellmann_reward = self.cfg.algorithm.get("use_true_bellmann_reward", False)
+        if use_true_bellmann_reward:
+            return self._forward_critic_true_bellmann_reward(batch)
+
         use_crossq = self.cfg.algorithm.get("q_head_type", "default") == "crossq"
         bootstrap_type = self.cfg.algorithm.get("bootstrap_type", "standard")
         agg_q = self.cfg.algorithm.get("agg_q", "min")
@@ -352,15 +356,18 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
         chunk_reward = self.cfg.algorithm.get("chunk_reward", False)
         use_action_chunking = self.cfg.actor.model.get("openpi", {}).get("use_action_chunking", False)
         if use_dsrl:
-            num_action_chunks = self.cfg.actor.model.get("num_action_chunks", 1)
-            discount = self.cfg.algorithm.gamma**num_action_chunks
+            # num_action_chunks = self.cfg.actor.model.get("num_action_chunks", 1)
+            # discount = self.cfg.algorithm.gamma**num_action_chunks
+            self.action_horizon = batch["actions"].shape[1]
+            discount = self.cfg.algorithm.gamma**self.action_horizon
+            batch_dim = batch["actions"].shape[0]
             if chunk_reward:
-                self.action_horizon = batch["actions"].shape[1]
+                # self.action_horizon = batch["actions"].shape[1]
                 batch_dim = batch["actions"].shape[0]
-                # Create mask: True until first termination, then False
-                mask = (~batch["terminations"]).cumprod(dim=1).bool()
-                # Apply mask
-                batch["rewards"] = batch["rewards"] * mask
+                # # Create mask: True until first termination, then False
+                # mask = (~batch["terminations"]).cumprod(dim=1).bool()
+                # # Apply mask
+                # batch["rewards"] = batch["rewards"] * mask
                 exponents = torch.arange(0, self.action_horizon).float() # [0, 1, 2, ..., H-1]
                 gamma_powers = torch.pow(self.cfg.algorithm.gamma, exponents) #[gamma^0, gamma^1, ..., gamma^H-1], Shape: (H,)
                 gamma_powers = gamma_powers.unsqueeze(0).expand(batch_dim, -1).to(self.device) # Shape: (B, H)
@@ -508,6 +515,7 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
         Requires ``intermediate_obs``, DSRL, ``use_toperl_critic``.
         """
         use_crossq = self.cfg.algorithm.get("q_head_type", "default") == "crossq"
+        chunk_reward = self.cfg.algorithm.get("chunk_reward", False)
         if use_crossq:
             raise NotImplementedError(
                 "use_intra_chunking with Cross-Q is not implemented."
@@ -541,7 +549,11 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
         rewards = batch["rewards"].to(self.torch_dtype)
         terminations = batch["terminations"]
 
-        bsz, L, _ = actions.shape
+        B, L, _ = actions.shape
+
+        L_raw = actions.shape[1]        # number of actions
+        L_total = L_raw + 1            # number of states
+        N = L_raw                      # number of targets
 
         k_inter = None
         for _v in inter.values():
@@ -556,41 +568,16 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
                 f"got K={k_inter}."
             )
 
-        def _obs_after_k(k: int) -> dict:
-            if k == 0:
-                return curr_obs
-            if k < N:
-                o: dict = {}
-                for key, val in inter.items():
-                    if isinstance(val, torch.Tensor):
-                        o[key] = val[:, k - 1, ...]
-                    else:
-                        o[key] = val
-                for key, val in curr_obs.items():
-                    if key not in o:
-                        o[key] = val
-                return o
-            assert k == N # last obs is next obs
-            return next_obs
-
-        def _prefix_weight(n: int) -> torch.Tensor:
-            if n <= 1:
-                return torch.ones(bsz, device=terminations.device, dtype=dtype)
-            return torch.prod((~terminations[:, : n - 1]).to(dtype=dtype), dim=1)
 
         pi_kw: dict = {"train": True}
 
         dsrl_q = {"train": True}
         dsrl_prefix = {"train": True, "return_all_prefixes": True}
-        L = L + 1 # we have next obs which makes the total number of steps K+1 -> true L
-        N = L - 1 # we have next obs which makes the total number of actions L-1 -> true N
         dtype = self.torch_dtype
         device = self.device
 
-        # Keep masks in model dtype; .float() is FP32 and breaks FSDP bf16 backward.
-        alive_chunk = (~terminations.any(dim=-1)).to(dtype=dtype)
         # ----- future_returns [B, N]: R_k bootstrap terms (no grad) -----
-        future_returns = torch.zeros(bsz, N, device=device, dtype=dtype)
+        future_returns = torch.zeros(B, N, device=device, dtype=dtype)
         with torch.no_grad():
             pi_a, log_pi, _ = self.model(
                 forward_type=ForwardType.SAC,
@@ -628,28 +615,76 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
                 q_pi_col0 = q_pi_tar.squeeze(-1)
             q_pi_col0 = q_pi_col0.to(dtype=dtype)
 
-            for j in range(1, L):
-                q_tar_sj = self.target_model(
-                    forward_type=ForwardType.SAC_Q,
-                    obs=_obs_after_k(j),
-                    actions=actions,
-                    shared_feature=None,
-                    **dsrl_prefix,
-                )
-                vj = q_tar_sj[:, 0, 0]
-                if bootstrap_type == "always":
-                    boot_j = torch.ones(bsz, device=device, dtype=dtype)
-                elif bootstrap_type == "standard":
-                    boot_j = (~terminations[:, j - 1]).to(dtype=dtype) * alive_chunk
-                else:
-                    raise NotImplementedError(f"{bootstrap_type=} is not supported!")
-                future_returns[:, j-1] = (vj * boot_j).to(dtype=dtype)
+            # for j in range(1, L_total):
+            #     q_tar_sj = self.target_model(
+            #         forward_type=ForwardType.SAC_Q,
+            #         obs=_obs_after_k(j),
+            #         actions=actions,
+            #         shared_feature=None,
+            #         **dsrl_prefix,
+            #     )
+            #     vj = q_tar_sj[:, 0, 0]
+            #     if bootstrap_type == "always":
+            #         boot_j = torch.ones(bsz, device=device, dtype=dtype)
+            #     elif bootstrap_type == "standard":
+            #         boot_j = torch.prod((~terminations[:, :j]).to(dtype=dtype), dim=1)
+            #     else:
+            #         raise NotImplementedError(f"{bootstrap_type=} is not supported!")
+            #     future_returns[:, j-1] = (vj * boot_j).to(dtype=dtype)
+            # build obs sequence
+            obs_seq = {}
+            for k in curr_obs.keys():
+                parts = [curr_obs[k].unsqueeze(1)]
+                if k in inter:
+                    parts.append(inter[k])
+                parts.append(next_obs[k].unsqueeze(1))
+                obs_seq[k] = torch.cat(parts, dim=1)   # [B, N+1, ...]
+
+            # take s1..sN 
+            obs_j = {k: v[:, 1:] for k, v in obs_seq.items()}  # [B, N, ...]
+
+            #  flatten
+            obs_flat = {
+                k: v.reshape(B * N, *v.shape[2:])
+                for k, v in obs_j.items()
+            }
+
+            # # repeat actions
+            # actions_flat = actions.unsqueeze(1).expand(-1, N, -1, -1)
+            # actions_flat = actions_flat.reshape(B * N, N, -1)
+
+            q_tar_all = self.target_model(
+                forward_type=ForwardType.SAC_Q,
+                obs=obs_flat,
+                actions=None,
+                shared_feature=None,
+                **dsrl_prefix,
+            )
+
+            v_tar_flat = q_tar_all[:, 0, :]          # [B*N, num_q_heads]
+            if agg_q == "min":
+                v_tar_flat = v_tar_flat.min(dim=-1).values
+            else:
+                v_tar_flat = v_tar_flat.mean(dim=-1)
+            v_all = v_tar_flat.view(B, N)             # [B, N]
+            if bootstrap_type == "always":
+                boot = torch.ones_like(v_all)
+            elif bootstrap_type == "standard":
+                boot = torch.cumprod((~terminations).to(dtype), dim=1)
+                # boot = torch.roll(boot, shifts=1, dims=1)
+                # boot[:, 0] = 1.0, sagt Arvind, vllt lügt er auch
+            else:
+                raise NotImplementedError
+
+            future_returns = (v_all * boot).to(dtype=dtype)
 
         # ----- N-step targets: tril discounted rewards + γ^k R_k -----
         rw_mask = (~terminations).cumprod(dim=1).bool()
+        rw_mask = torch.roll(rw_mask, shifts=1, dims=1)
+        rw_mask[:, 0] = True
         seg_r = (rewards * rw_mask.to(dtype=rewards.dtype)).to(dtype=dtype)
 
-        discount_idx = torch.arange(L, device=device, dtype=torch.float32)
+        discount_idx = torch.arange(L_total, device=device, dtype=torch.float32)
         discount_seq = torch.pow(
             torch.tensor(gamma, device=device, dtype=torch.float32), discount_idx
         ).to(dtype=dtype)
@@ -661,64 +696,100 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
         tril_discount = (
             seg_discount_r.unsqueeze(1).expand(-1, N, -1) * reward_tril_mask.view(1, N, N)
         ).sum(dim=-1)
-        discount_return = future_returns * discount_seq[1:L] 
-        n_step_targets = tril_discount + discount_return
+        discount_return = future_returns * discount_seq[1:L_total] 
+        if chunk_reward:
+            n_step_targets = tril_discount + discount_return
+        else:
+            n_step_targets = rewards[:, 0:1] + discount_return
 
         # ----- online preds vs targets -----
-        q_s0_full = self.model(
-            forward_type=ForwardType.SAC_Q,
-            obs=curr_obs,
-            actions=actions,
-            shared_feature=None,
-            **dsrl_prefix,
-        )
-        v_online = q_s0_full[:, 0, 0].unsqueeze(-1)
-        v_target = q_pi_col0.unsqueeze(-1).to(dtype=v_online.dtype)
-        v_loss = F.mse_loss(v_online, v_target)
-
-        # Per prefix length t: batch-weighted MSE, then mean over t (equal weight per horizon).
-        prefix_step_means: list[torch.Tensor] = []
-        q_sum = 0.0
-        tgt_sum = 0.0
-        n_stats = 0
-
-        for t in range(1, L):
-            w_t = torch.prod((~terminations[:, : t]).to(dtype=dtype), dim=1)
-            # w_t = _prefix_weight(t) # if the episode terminated before t, the weight is 0
-            if not bool(w_t.any()):
-                continue
-            q_raw = self.model(
+        with self.worker_timer("forward_critic_sac_q_intra"):
+            q_full = self.model(
                 forward_type=ForwardType.SAC_Q,
                 obs=curr_obs,
-                actions=actions[:, :t, :].contiguous(),
+                actions=actions,
                 **dsrl_prefix,
             )
-            q_pred = q_raw[:, -1, 0].unsqueeze(-1) # last q-value
-            target_t = n_step_targets[:, t-1].unsqueeze(-1)
-            target_t = target_t.to(dtype=q_pred.dtype)
-            td = F.mse_loss(q_pred, target_t, reduction="none")
-            w = w_t.to(device=td.device, dtype=td.dtype)
-            denom = w.sum().clamp_min(torch.tensor(1e-8, device=td.device, dtype=td.dtype))
-            step_mean = (td * w.unsqueeze(-1)).sum() / denom
-            prefix_step_means.append(step_mean)
-            n_stats += 1
-            q_sum += float(
-                (q_pred.detach().squeeze(-1) * w).sum() / (w.sum() + 1e-8)
-            )
-            tgt_sum += float(
-                (target_t.squeeze(-1) * w).sum() / (w.sum() + 1e-8)
-            )
+        v_online = q_full[:, 0, :]                                         # [B, num_q_heads]
+        v_target = q_pi_col0.unsqueeze(-1).expand_as(v_online)             # [B, 1] → [B, num_q_heads]
+        v_loss = F.mse_loss(v_online, v_target.to(dtype=v_online.dtype))
 
-        if prefix_step_means:
-            prefix_loss = torch.stack(prefix_step_means).mean()
-        else:
-            prefix_loss = torch.zeros((), device=device, dtype=dtype)
+        # Per prefix length t: batch-weighted MSE, then mean over t (equal weight per horizon).
 
+        # for t in range(1, L_total):
+        #     w_t = torch.prod((~terminations[:, : t]).to(dtype=dtype), dim=1)
+        #     # w_t = _prefix_weight(t) # if the episode terminated before t, the weight is 0
+        #     if not bool(w_t.any()):
+        #         continue
+        #     q_raw = self.model(
+        #         forward_type=ForwardType.SAC_Q,
+        #         obs=curr_obs,
+        #         actions=actions[:, :t, :].contiguous(),
+        #         **dsrl_prefix,
+        #     )
+        #     q_pred = q_raw[:, -1, 0].unsqueeze(-1) # last q-value
+        #     target_t = n_step_targets[:, t-1].unsqueeze(-1)
+        #     target_t = target_t.to(dtype=q_pred.dtype)
+        #     td = F.mse_loss(q_pred, target_t, reduction="none")
+        #     w = w_t.to(device=td.device, dtype=td.dtype)
+        #     denom = w.sum().clamp_min(torch.tensor(1e-8, device=td.device, dtype=td.dtype))
+        #     step_mean = (td * w.unsqueeze(-1)).sum() / denom
+        #     prefix_step_means.append(step_mean)
+        #     n_stats += 1
+        #     q_sum += float(
+        #         (q_pred.detach().squeeze(-1) * w).sum() / (w.sum() + 1e-8)
+        #     )
+        #     tgt_sum += float(
+        #         (target_t.squeeze(-1) * w).sum() / (w.sum() + 1e-8)
+        #     )
+        
+
+        # extract all prefix Q(s, a_{1:t})
+        q_pred_all = q_full[:, 1:, :]   # [B, N, num_q_heads]
+
+        # targets already aligned as [B, N]
+        target_all = n_step_targets.to(dtype=q_pred_all.dtype)
+
+        # w_all[k, i] = 0 once episode k has terminated before prefix step i
+        w_all = torch.cumprod((~terminations).to(dtype=dtype), dim=1)  # [B, N]
+
+        # L(ψ) = (1/N) Σ_i L_i,  L_i = (1/Σ_k w_{k,i}) Σ_k w_{k,i}*(Q_ψ(s,a_{1:i})-G^(i))²
+        # gradient-level averaging: each horizon i contributes equally
+        td_all = F.mse_loss(q_pred_all, target_all.unsqueeze(-1).expand_as(q_pred_all), reduction="none")  # [B, N, num_q_heads]
+        if not chunk_reward:
+            prefix_loss = td_all[:, -1, :].mean() #then it should be just like before
+        # else:
+        #     valid_steps = w_all.sum(dim=0) > 0                                       # [N]
+        #     denom = w_all.sum(dim=0).clamp_min(1e-8)                                 # [N]
+        #     step_means = (td_all * w_all.unsqueeze(-1)).sum(dim=0) / denom.unsqueeze(-1)  # [N, num_q_heads]
+        #     step_means = step_means[valid_steps]                                     # [valid_N, num_q_heads]
+        #     if step_means.numel() > 0:
+        #         prefix_loss = step_means.mean()
+        #     else:
+        #         prefix_loss = torch.zeros((), device=device, dtype=dtype)
+        # flat global-weighted mean (does NOT give equal weight per horizon):
+        # denom = w_all.sum().clamp_min(1e-8)
+        # prefix_loss = (td_all * w_all).sum() / denom
+        # if prefix_step_means:
+        #     prefix_loss = torch.stack(prefix_step_means).mean()
+        # else:
+        #     prefix_loss = torch.zeros((), device=device, dtype=dtype)
+        # prefix_loss = td_all
         critic_loss = prefix_loss + v_loss
+        # Weighted means over all valid (alive) prefixes for logging.
+        total_weight = w_all.sum()
+        if total_weight > 0:
+            q_data = float((q_pred_all.detach().mean(dim=-1) * w_all).sum() / total_weight)
+            target_q_values = float((target_all.detach() * w_all).sum() / total_weight)
+        else:
+            q_data = float(q_pred_all.detach().mean().item())
+            target_q_values = float(target_all.detach().mean().item())
         metrics = {
-            "q_data": q_sum / max(n_stats, 1),
-            "target_q_values": tgt_sum / max(n_stats, 1),
-            "intrachunk_prefix_steps": float(max(L - 1, 1)),
+            "q_data": q_data,
+            "target_q_values": target_q_values,
+            "value_data": float(v_online.mean().item()),
+            "value_target": float(v_target.mean().item()),
+            "intrachunk_prefix_steps": float(max(L_total - 1, 1)),
             "prefix_critic_loss": float(prefix_loss.item()),
             "v_align_critic_loss": float(v_loss.item()),
             "critic_loss": float(critic_loss.item()),
