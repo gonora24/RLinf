@@ -141,17 +141,47 @@ class AutoregressiveActionTransformer(nn.Module):
         
         self.context_proj = nn.Linear(state_dim + image_dim, d_model, bias=False)
         self.action_proj = nn.Linear(action_dim, d_model)
-        self.start_token = nn.Parameter(torch.zeros(d_model))
+        self.start_token = nn.Parameter(torch.zeros(1, 1, d_model))
+        # Positional embeddings
+        self.pos_emb = nn.Parameter(torch.randn(1, 1, d_model))
 
-        decoder_layer = nn.TransformerDecoderLayer(
+        encoder_layer = nn.TransformerEncoderLayer(
             d_model=d_model,
             nhead=n_heads,
-            dim_feedforward=d_model*2,
-            batch_first=True
+            dim_feedforward=d_model*4,
+            batch_first=True,
+            dropout=0.1
         )
-        self.transformer = nn.TransformerDecoder(decoder_layer, num_layers=n_layers)
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=n_layers)
 
         self.out = nn.Linear(d_model, action_dim * 2)
+
+    def _dist(self, h):
+        out = self.out(h)
+        mu, log_std = out.chunk(2, dim=-1)
+        log_std = torch.clamp(log_std, self.log_std_min, self.log_std_max)
+        std = log_std.exp()
+        return mu, std
+
+    def _sample_tanh(self, mu, std):
+        normal = torch.distributions.Normal(mu, std)
+        base = torch.distributions.Independent(normal, 1)
+
+        x = base.rsample()
+        y = torch.tanh(x)
+
+        log_prob = base.log_prob(x)
+        log_prob -= torch.sum(torch.log(1 - y.pow(2) + 1e-7), dim=-1)
+
+        if self.low is not None and self.high is not None:
+            scale = (self.high - self.low) / 2.0
+            shift = (self.high + self.low) / 2.0
+            y = y * scale + shift
+            log_prob -= self.action_dim * torch.log(
+                torch.tensor(scale, device=y.device)
+            )
+
+        return y, log_prob
 
     def forward(self, features: torch.Tensor):
         """
@@ -188,63 +218,38 @@ class AutoregressiveActionTransformer(nn.Module):
         log_probs = []
 
         # Initialize first token
-        prev_token = self.start_token.unsqueeze(0).repeat(B, 1)  # [B, 1, d_model]
+        # tokens = self.start_token.expand(B, 1, -1)
+        tokens = context
 
         for t in range(self.chunk_size):
-            # Embed previous action token
-            token_embed = prev_token.unsqueeze(1)  # [B,1,d_model]
+            tgt = tokens + self.pos_emb[:, :tokens.size(1)]
 
-            # Transformer decoder: token attends to context (memory)
-            h = self.transformer(token_embed, context)  # [B,1,d_model]
-            out = self.out(h).squeeze(1)  # [B, action_dim*2]
-            mu, log_std = out.chunk(2, dim=-1)
-            log_std = torch.clamp(log_std, self.log_std_min, self.log_std_max)
-            std = log_std.exp()
+            mask = torch.triu(
+                torch.ones(tgt.size(1), tgt.size(1), device=tgt.device),
+                diagonal=1,
+            ).bool()
 
-            # Sample / deterministic
+            # h = self.transformer(tgt, context, tgt_mask=mask)
+            h = self.transformer(tgt, mask=mask, is_causal=True)
+            h_last = h[:, -1]
+
+            mu, std = self._dist(h_last)
+
             if deterministic:
                 action = torch.tanh(mu)
-                log_prob = torch.zeros(B, device=features.device)
+                log_prob = torch.zeros(B, device=tgt.device)
             else:
-                # Create base Normal distribution (wrapped as multivariate via Independent)
-                normal = torch.distributions.Normal(mu, std)
-                base_dist = torch.distributions.Independent(normal, 1)
-
-                # Sample from base distribution (pre-tanh space)
-                x_t = base_dist.rsample()  # [B, output_dim], supports gradient flow
-
-                # Manually apply tanh transform
-                y_t = torch.tanh(x_t)  # [B, output_dim], in [-1, 1]
-
-                # Compute log_prob (CleanRL style)
-                # 1. Base distribution log_prob (in pre-tanh space)
-                # 2. Subtract Jacobian correction: log|det J| = sum(log(1 - y_i^2))
-                log_prob = base_dist.log_prob(x_t)  # [B], already summed
-                log_prob -= torch.sum(
-                    torch.log(1 - y_t.pow(2) + 1e-7), dim=-1
-                )  # Jacobian correction
-
-                # Optional: rescale to [low, high]
-                if self.low is not None and self.high is not None:
-                    scale_factor = (self.high - self.low) / 2.0
-                    shift = (self.high + self.low) / 2.0
-                    action = y_t * scale_factor + shift
-                    # Subtract log(scale_factor) from log_prob
-                    log_prob -= torch.sum(
-                        torch.log(abs(scale_factor) * torch.ones_like(y_t)), dim=-1
-                    )
-                else:
-                    action = y_t
+                action, log_prob = self._sample_tanh(mu, std)
 
             actions.append(action)
             log_probs.append(log_prob)
 
-            # Set prev_token for next step (autoregressive)
-            # Project sampled action back to d_model
-            prev_token = self.action_proj(action)
+            # IMPORTANT: append, don't overwrite
+            new_token = self.action_proj(action).unsqueeze(1)
+            tokens = torch.cat([tokens, new_token], dim=1)
 
         # Stack actions and log_probs
         actions = torch.stack(actions, dim=1)  # [B, chunk_size, action_dim]
-        log_probs = torch.stack(log_probs, dim=1).sum(dim=1)  # sum over chunk → [B]
+        log_probs = torch.stack(log_probs, dim=1).mean(dim=1)  # mean over chunk → [B]
 
         return actions, log_probs
