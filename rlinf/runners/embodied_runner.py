@@ -270,6 +270,9 @@ class EmbodiedRunner:
                         output_channel=self.env_channel,
                         actor_channel=self.actor_channel,
                     )
+                    if _step >= self.cfg.algorithm.replay_buffer.get("min_buffer_size", 100):
+                        self.rollout.set_buffer_ready(True)
+                
                     rollout_handle: Handle = self.rollout.generate(
                         input_channel=self.env_channel,
                         output_channel=self.rollout_channel,

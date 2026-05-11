@@ -79,12 +79,16 @@ class OpenPi0Config(Pi0Config):
     dsrl_hidden_dims: tuple = field(
         default_factory=lambda: (128, 128, 128)
     )  # Hidden dims for Q-head and GaussianPolicy
+    dsrl_critic_hidden_dims: tuple = field(
+        default_factory=lambda: (128, 128, 128)
+    )  # Hidden dims for critic
     use_action_chunking: bool = False  # use action chunking for DSRL
     use_transformer_critic: bool = False  # use transformer critic for DSRL
     use_toperl_critic: bool = False  # use topErl critic for DSRL
     action_magnitude: float = 1.0  # action magnitude for DSRL
     use_state_encoder: bool = False  # use state encoder for DSRL
     use_actor_transformer: bool = False  # use actor transformer for DSRL
+    critic_num_layers: int = 3  # number of layers for critic
 
     # ===== NFT-specific parameters =====
     is_nft: bool = False
@@ -265,8 +269,8 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
                     state_dim=self.config.dsrl_state_latent_dim,
                     action_dim=self.config.dsrl_action_noise_dim,
                     n_embed=self.config.dsrl_hidden_dims[-1],
-                    n_heads=8, # attention heads
-                    n_layer=3,
+                    n_heads=4, # attention heads
+                    n_layer=self.config.critic_num_layers,
                     action_horizon=self.config.action_horizon,
                     dropout_rate=0.1,
                     num_q_heads=self.config.dsrl_num_q_heads,
@@ -278,12 +282,13 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
                     action_dim=self.config.dsrl_action_noise_dim,
                     action_horizon=self.config.action_horizon,
                     n_embd=self.config.dsrl_hidden_dims[-1],
-                    n_head=8,
-                    n_layer=3,
+                    n_head=4,
+                    n_layer=self.config.critic_num_layers,
                     dropout=0.1,
                     use_layer_norm=True,
                     bias=False,
                     relative_pos=True,
+                    num_q_heads=self.config.dsrl_num_q_heads,
                 ).to(dtype=_dsrl_dtype)
             else:
                 if self.config.use_action_chunking:
@@ -299,7 +304,7 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
                     state_dim=state_dim,
                     image_dim=self.config.dsrl_image_latent_dim,
                     action_dim=action_dim,
-                    hidden_dims=self.config.dsrl_hidden_dims,
+                    hidden_dims=self.config.dsrl_critic_hidden_dims,
                     num_q_heads=self.config.dsrl_num_q_heads,
                     output_dim=1,
                 ).to(dtype=_dsrl_dtype)
@@ -625,8 +630,10 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
         )  # obs precision processor
         observation = _model.Observation.from_dict(processed_obs)
 
+        buffer_ready = kwargs.get("buffer_ready", False)
+
         is_dsrl_active = self.config.use_dsrl
-        if is_dsrl_active:
+        if is_dsrl_active and buffer_ready:
             # DSRL mode (both train and eval)
 
             # Step 1: SAC agent outputs noise
@@ -651,7 +658,7 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
 
             # Return actual actions to environment, but forward_inputs stores noise.
             actions = real_actions
-            prev_logprobs = noise_logprob  # SAC noise logprob
+            prev_logprobs = noise_logprob.unsqueeze(-1).unsqueeze(-1).repeat(1, self.config.action_chunk, self.config.action_env_dim)  # SAC noise logprob
             prev_values = outputs.get("prev_values")
             forward_action = noise_actions  # Used for SAC training
 
@@ -665,7 +672,7 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
             )["actions"]
             prev_logprobs = outputs["prev_logprobs"]
             prev_values = outputs["prev_values"]
-            forward_action = None
+            forward_action = outputs['noise_actions']
 
         forward_inputs = {
             # "chains": outputs["chains"],
@@ -838,6 +845,7 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
             "prev_logprobs": log_probs,
             "prev_values": values,
             "denoise_inds": denoise_inds,
+            'noise_actions': noise
         }
         if collect_nft_traces:
             result.update(
@@ -1304,9 +1312,9 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
         # Support both call styles: obs (new, from sac_dsrl) or data (legacy)
         if obs is None:
             obs = data.get("obs", data) if data is not None else kwargs.get("obs", {})
-        if actions is None:
+        if actions is None and not (self.config.use_transformer_critic or self.config.use_toperl_critic):
             actions = kwargs.get("actions")
-        if actions is None:
+        if actions is None and not (self.config.use_transformer_critic or self.config.use_toperl_critic):
             raise ValueError("sac_q_forward requires `actions`; pass a dummy chunk if needed.")
 
         # Handle two obs formats:
@@ -1330,7 +1338,8 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
         device = next(self.critic_image_encoder.parameters()).device
         images = images.to(device=device, dtype=torch.bfloat16)
         states = states.to(device=device, dtype=torch.bfloat16)
-        actions = actions.to(device=device, dtype=torch.bfloat16)
+        if actions is not None:
+            actions = actions.to(device=device, dtype=torch.bfloat16)
 
         # Extract features (using critic's independent encoder)
         image_features = self.critic_image_encoder(images)

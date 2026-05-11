@@ -44,6 +44,7 @@ class MultiStepRolloutWorker(Worker):
 
         self.num_pipeline_stages = cfg.rollout.pipeline_stage_num
         self.enable_offload = self.cfg.rollout.get("enable_offload", False)
+        self.buffer_ready = False
 
         self.placement = HybridComponentPlacement(cfg, Cluster())
 
@@ -279,6 +280,12 @@ class MultiStepRolloutWorker(Worker):
 
         with torch.no_grad():
             expert_label_flag = False
+            kwargs["buffer_ready"] = self.buffer_ready
+            if self.buffer_ready:
+                kwargs["mode"] = "train"
+            else:
+                kwargs["mode"] = "eval"
+            # self.log_info(f"Buffer ready: {self.buffer_ready}")
             # Decide which model to act via use_expert
             if use_expert:
                 actions, result = self.expert_model.predict_action_batch(
@@ -648,3 +655,6 @@ class MultiStepRolloutWorker(Worker):
             )
         if hasattr(self.hf_model, "set_global_step"):
             self.hf_model.set_global_step(global_step)
+
+    def set_buffer_ready(self, buffer_ready: bool):
+        self.buffer_ready = buffer_ready
