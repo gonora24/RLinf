@@ -49,11 +49,15 @@ class SeqQFuncTorch(nn.Module):
 
         pos = self.pos_embed(torch.arange(1 + T, device=seq.device))   # [1+T, n_embed]
         x = seq + pos
+        mask = torch.triu(
+            torch.ones(x.size(1), x.size(1), device=x.device),
+            diagonal=1,
+        ).bool()
 
-        x = self.transformer(x)
+        x = self.transformer(x, mask=mask, is_causal=True)
         x = self.norm(x)
         x = self.head(x)            # [B, 1+T, out_dim]
-        return x[:, 1:, :]          # drop context token, keep action Q-values
+        return x         # [B, 1+T, out_dim] first is V-value token, then action Q-values
 
 
 
@@ -179,7 +183,7 @@ def parse_dtype_device(dtype: str, device: str):
 
 class CriticGPT(nn.Module):
 
-    def __init__(self, state_dim, image_dim, action_dim, action_horizon, n_embd, n_head, n_layer, dropout, use_layer_norm, bias, relative_pos):
+    def __init__(self, state_dim, image_dim, action_dim, action_horizon, n_embd, n_head, n_layer, dropout, use_layer_norm, bias, relative_pos, num_q_heads):
         super().__init__()
 
         self.use_layer_norm = use_layer_norm
@@ -198,7 +202,7 @@ class CriticGPT(nn.Module):
             del module_dict['ln_f']
 
         self.transformer = nn.ModuleDict(module_dict)
-        self.output_layer = nn.Linear(n_embd, 1, bias=False)
+        self.output_layer = nn.Linear(n_embd, num_q_heads, bias=False)
 
         # init all weights
         self.apply(self._init_weights)
@@ -300,6 +304,6 @@ class CriticGPT(nn.Module):
         # -> Shape [*add_dim, num_actions + 1, 1] -> [*add_dim, num_actions + 1]
         x = self.output_layer(x)  # value is dimensionless
 
-        # v = x[..., 0, :]  # shape [*add_dim, num_actions + 1, 1]
-        # q = x[..., 1:, :]  # shape [*add_dim, num_actions + 1, 1]
+        # v = x[..., 0, :]  # shape [*add_dim, num_actions + 1, num_q_heads]
+        # q = x[..., 1:, :]  # shape [*add_dim, num_actions + 1, num_q_heads]
         return x
