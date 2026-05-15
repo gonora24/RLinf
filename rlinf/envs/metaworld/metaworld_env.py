@@ -50,6 +50,7 @@ class MetaWorldEnv(gym.Env):
         self.num_group = self.num_envs // self.group_size
         self.use_fixed_reset_state_ids = cfg.use_fixed_reset_state_ids
         self.specific_reset_id = cfg.get("specific_reset_id", None)
+        self.task_id = cfg.get("task_id", None)
 
         self.ignore_terminations = cfg.ignore_terminations
         self.auto_reset = cfg.auto_reset
@@ -135,6 +136,13 @@ class MetaWorldEnv(gym.Env):
         return env_fn_params
 
     def _compute_total_num_group_envs(self):
+        if self.task_id is not None:
+            # Single-task MT1 mode: reset ids index trials for cfg.task_id only [0, task_num_trials).
+            self.trial_id_bins = [self.task_num_trials]
+            self.total_num_group_envs = self.task_num_trials
+            self.cumsum_trial_id_bins = np.cumsum(self.trial_id_bins)
+            return
+
         self.total_num_group_envs = 0
         self.trial_id_bins = []
         for task_id in range(self.num_tasks):
@@ -155,6 +163,16 @@ class MetaWorldEnv(gym.Env):
         )
 
     def _get_random_reset_state_ids(self, num_reset_states):
+        if self.task_id is not None:
+            # reset_state_ids = np.arange(self.total_num_group_envs - 10, self.total_num_group_envs) * np.ones(
+            #     (num_reset_states,), dtype=int
+            # )
+            reset_state_ids = self._generator.integers(
+                low=self.total_num_group_envs - 10,
+                high=self.total_num_group_envs,
+                size=(num_reset_states,),
+            )
+            return reset_state_ids
         if self.specific_reset_id is not None:
             reset_state_ids = self.specific_reset_id * np.ones(
                 (num_reset_states,), dtype=int
@@ -175,6 +193,11 @@ class MetaWorldEnv(gym.Env):
         return reset_state_ids
 
     def _get_ordered_reset_state_ids(self, num_reset_states):
+        if self.task_id is not None:
+            reset_state_ids = np.arange(
+                self.total_num_group_envs - 10, self.total_num_group_envs
+            ) * np.ones((num_reset_states,), dtype=int)
+            return reset_state_ids
         reset_state_ids = self.reset_state_ids_all[self.seed_offset]
         return reset_state_ids
 
@@ -186,7 +209,7 @@ class MetaWorldEnv(gym.Env):
             start_pivot = 0
             for task_id, end_pivot in enumerate(self.cumsum_trial_id_bins):
                 if reset_state_id < end_pivot and reset_state_id >= start_pivot:
-                    task_ids.append(task_id)
+                    task_ids.append(self.task_id if self.task_id is not None else task_id)
                     trial_ids.append(reset_state_id - start_pivot)
                     break
                 start_pivot = end_pivot
