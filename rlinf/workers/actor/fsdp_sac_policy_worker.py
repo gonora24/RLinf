@@ -848,25 +848,34 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
         actor_loss = ((self.entropy_temp.alpha * log_pi) - qf_pi).mean()
 
         entropy = -log_pi.mean()
-        return actor_loss, entropy, metrics
+        return actor_loss, entropy, metrics, log_pi.detach()
 
     @Worker.timer("forward_alpha")
-    def forward_alpha(self, batch):
-        curr_obs = batch["curr_obs"]
-        with torch.no_grad():
-            kwargs = {}
-            if self.cfg.actor.model.model_type in ["openvla", "openvla_oft"]:
-                kwargs["temperature"] = (
-                    self.cfg.algorithm.sampling_params.temperature_train
+    def forward_alpha(self, batch, log_pi: Optional[torch.Tensor] = None):
+        """Compute alpha loss.
+
+        Args:
+            batch: Training batch dict (used only when log_pi is not provided).
+            log_pi: Pre-computed detached log-probabilities from the actor
+                forward pass.  When supplied the model forward is skipped,
+                saving a full SAC forward pass per update epoch.
+        """
+        if log_pi is None:
+            curr_obs = batch["curr_obs"]
+            with torch.no_grad():
+                kwargs = {}
+                if self.cfg.actor.model.model_type in ["openvla", "openvla_oft"]:
+                    kwargs["temperature"] = (
+                        self.cfg.algorithm.sampling_params.temperature_train
+                    )
+                if self.use_dsrl:
+                    kwargs["train"] = True
+                _, log_pi, _ = self.model(
+                    forward_type=ForwardType.SAC, obs=curr_obs, **kwargs
                 )
-            if self.use_dsrl:
-                kwargs["train"] = True
-            _, log_pi, _ = self.model(
-                forward_type=ForwardType.SAC, obs=curr_obs, **kwargs
-            )
-            if log_pi.ndim == 1:
-                log_pi = log_pi.unsqueeze(-1)
-            log_pi = log_pi.sum(dim=-1, keepdim=True)
+                if log_pi.ndim == 1:
+                    log_pi = log_pi.unsqueeze(-1)
+                log_pi = log_pi.sum(dim=-1, keepdim=True)
 
         alpha = self.entropy_temp.compute_alpha()
         alpha_loss = -alpha * (log_pi.mean() + self.target_entropy)
@@ -925,13 +934,15 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
             gbs_actor_loss = []
             gbs_entropy = []
             all_actor_metrics = {}
+            gbs_log_pi = []
             for batch in train_micro_batch_list:
-                actor_loss, entropy, q_metrics = self.forward_actor(batch)
+                actor_loss, entropy, q_metrics, log_pi_detached = self.forward_actor(batch)
                 actor_loss = actor_loss / self.gradient_accumulation
                 actor_loss.backward()
                 gbs_actor_loss.append(actor_loss.item() * self.gradient_accumulation)
                 gbs_entropy.append(entropy.item())
                 append_to_dict(all_actor_metrics, q_metrics)
+                gbs_log_pi.append(log_pi_detached)
             all_actor_metrics = {
                 f"actor/{key}": np.mean(value)
                 for key, value in all_actor_metrics.items()
@@ -948,8 +959,8 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
             if self.alpha_optimizer is not None:
                 self.alpha_optimizer.zero_grad()
                 gbs_alpha_loss = []
-                for batch in train_micro_batch_list:
-                    alpha_loss = self.forward_alpha(batch) / self.gradient_accumulation
+                for batch, log_pi_detached in zip(train_micro_batch_list, gbs_log_pi):
+                    alpha_loss = self.forward_alpha(batch, log_pi=log_pi_detached) / self.gradient_accumulation
                     alpha_loss.backward()
                     gbs_alpha_loss.append(
                         alpha_loss.item() * self.gradient_accumulation
