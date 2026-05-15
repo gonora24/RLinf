@@ -353,7 +353,7 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
                 )
             else:
                 sample = jax.tree.map(lambda x: x if len(x.shape) == 3 else x, sample)
-            if first_process:
+            if first_process and obs["prompt"] is not None:
                 sample["prompt"] = obs["prompt"][i]
             else:
                 sample["prompt"] = "xxxx"
