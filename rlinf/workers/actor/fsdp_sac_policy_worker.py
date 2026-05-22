@@ -19,6 +19,7 @@ from typing import Optional
 import numpy as np
 import torch
 import torch.nn.functional as F
+import torchvision
 from omegaconf import DictConfig
 from torch.utils.data import DataLoader
 
@@ -33,7 +34,7 @@ from rlinf.data.replay_buffer import TrajectoryReplayBuffer
 from rlinf.models.embodiment.base_policy import ForwardType
 from rlinf.models.embodiment.modules.entropy_tunning import EntropyTemperature
 from rlinf.scheduler import Channel, Worker
-from rlinf.utils import drq
+from rlinf.utils import color_jitter, drq
 from rlinf.utils.distributed import all_reduce_dict
 from rlinf.utils.metric_utils import (
     append_to_dict,
@@ -45,6 +46,24 @@ from rlinf.utils.nested_dict_process import (
 )
 from rlinf.utils.utils import clear_memory
 from rlinf.workers.actor.fsdp_actor_worker import EmbodiedFSDPActor
+
+
+def _main_image_for_save(img: torch.Tensor) -> torch.Tensor:
+    """Convert one main image to [C, H, W] float32 in [0, 1] for save_image."""
+    x = img.detach().cpu()
+    if x.ndim != 3:
+        raise ValueError(f"Expected 3D image tensor, got {tuple(x.shape)}")
+    if x.shape[-1] == 3:
+        x = x.permute(2, 0, 1)
+    elif x.shape[0] != 3:
+        raise ValueError(f"Unrecognized image layout: {tuple(x.shape)}")
+    if x.dtype == torch.uint8:
+        x = x.float().div(255.0)
+    else:
+        x = x.float()
+        if x.max() > 1.0 + 1e-3:
+            x = x.div(255.0)
+    return x.clamp(0.0, 1.0)
 
 
 class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
@@ -59,6 +78,7 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
         self.alpha_optimizer = None
         self.update_step = 0
         self.enable_drq = bool(getattr(self.cfg.actor, "enable_drq", False))
+        self.color_jitter = bool(getattr(self.cfg.actor, "color_jitter", False))
 
     def init_worker(self):
         self.setup_model_and_optimizer(initialize_target=True)
@@ -113,14 +133,17 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
             param_filters = {
                 "critic": ["critic_image_encoder", "critic_state_encoder", "q_head", "critic"]
             }
+            both_optimizers_params = ["critic_image_encoder"]
         else:
             param_filters = {"critic": ["encoders", "encoder", "q_head", "state_proj"]}
+            both_optimizers_params = []
         filtered_optim_config = {"critic": self.cfg.actor.critic_optim}
         optimizers = self.build_optimizers(
             model=self.model,
             main_optim_config=self.cfg.actor.optim,
             param_filters=param_filters,
             filtered_optim_config=filtered_optim_config,
+            both_optimizers_params=both_optimizers_params,
         )
         self.optimizer = optimizers[0]
         self.qf_optimizer = optimizers[1]
@@ -895,13 +918,51 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
             global_batch_size_per_rank // self.cfg.actor.micro_batch_size,
         )
 
-        # move train_micro_batch_list to device and apply DRQ for critic/actor/alpha passes
-        for i, batch in enumerate(train_micro_batch_list):
-            batch = put_tensor_device(batch, device=self.device)
-            if self.enable_drq:
-                drq.apply_drq(batch["curr_obs"], pad=4)
-                drq.apply_drq(batch["next_obs"], pad=4)
-            train_micro_batch_list[i] = batch
+        # debug_image_dir = os.path.join(
+        #     self.cfg.runner.logger.log_path, "debug_images"
+        # )
+        # os.makedirs(debug_image_dir, exist_ok=True)
+        # if train_micro_batch_list:
+        #     batch = train_micro_batch_list[0]
+        #     curr_main_images = batch["curr_obs"]["main_images"]
+        #     next_main_images = batch["next_obs"]["main_images"]
+        #     n_save = min(5, curr_main_images.shape[0])
+        #     for i in range(n_save):
+        #         torchvision.utils.save_image(
+        #             _main_image_for_save(curr_main_images[i]),
+        #             os.path.join(debug_image_dir, f"curr_main_images_{i}.png"),
+        #         )
+        #         torchvision.utils.save_image(
+        #             _main_image_for_save(next_main_images[i]),
+        #             os.path.join(debug_image_dir, f"next_main_images_{i}.png"),
+        #         )
+        with self.worker_timer("apply_augmentations"):
+            seed = self.cfg.actor.get("seed", 1234)
+            for i, batch in enumerate(train_micro_batch_list):
+                batch = put_tensor_device(batch, device=self.device)
+                if self.enable_drq:
+                    batch["curr_obs"] = drq.apply_drq(batch["curr_obs"], pad=4)
+                    batch["next_obs"] = drq.apply_drq(batch["next_obs"], pad=4)
+                if self.color_jitter:
+                    curr_main_images = batch["curr_obs"]["main_images"]
+                    batch["curr_obs"]["main_images"] = (color_jitter.color_transform(curr_main_images.to(torch.float32)/255.0, seed=seed)*255.0).to(torch.uint8)
+                    next_main_images = batch["next_obs"]["main_images"]
+                    batch["next_obs"]["main_images"] = (color_jitter.color_transform(next_main_images.to(torch.float32)/255.0, seed=seed)*255.0).to(torch.uint8)
+                train_micro_batch_list[i] = batch
+
+        # for batch in train_micro_batch_list:
+        #     curr_main_images = batch["curr_obs"]["main_images"]
+        #     next_main_images = batch["next_obs"]["main_images"]
+        #     n_save = min(5, curr_main_images.shape[0])
+        #     for i in range(n_save):
+        #         torchvision.utils.save_image(
+        #             _main_image_for_save(curr_main_images[i]),
+        #             os.path.join(debug_image_dir, f"curr_main_images_{i}_after_aug.png"),
+        #         )
+        #         torchvision.utils.save_image(
+        #             _main_image_for_save(next_main_images[i]),
+        #             os.path.join(debug_image_dir, f"next_main_images_{i}_after_aug.png"),
+        #         )
 
         self.qf_optimizer.zero_grad()
         gbs_critic_loss = []

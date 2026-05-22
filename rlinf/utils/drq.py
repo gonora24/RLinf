@@ -100,10 +100,11 @@ def apply_drq(obs, pad=4):
     Returns:
         dict: Observation dictionary with DRQ applied.
     """
-    if obs.get("main_images", None) is not None:
+    if 'main_images' in obs.keys() and obs["main_images"] is not None:
+    # if obs.get("main_images", None) is not None:
         obs["main_images"] = drq_crop_main(obs["main_images"], pad=pad)
 
-    if obs.get("extra_view_images", None) is not None:
+    if 'extra_view_images' in obs.keys() and obs["extra_view_images"] is not None:
         obs["extra_view_images"] = drq_crop_extra(obs["extra_view_images"], pad=pad)
 
     return obs
