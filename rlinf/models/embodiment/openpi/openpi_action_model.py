@@ -241,11 +241,11 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
                     action_horizon=self.config.action_horizon,
                 ).to(dtype=_dsrl_dtype)
 
-            self.actor_image_encoder = LightweightImageEncoder64(
-                num_images=1,
-                latent_dim=self.config.dsrl_image_latent_dim,
-                image_size=64,
-            ).to(dtype=_dsrl_dtype)
+            # self.actor_image_encoder = LightweightImageEncoder64(
+            #     num_images=1,
+            #     latent_dim=self.config.dsrl_image_latent_dim,
+            #     image_size=64,
+            # ).to(dtype=_dsrl_dtype)
 
             if self.config.use_state_encoder:
                 self.actor_state_encoder = CompactStateEncoder(
@@ -257,6 +257,7 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
                 latent_dim=self.config.dsrl_image_latent_dim,
                 image_size=64,
             ).to(dtype=_dsrl_dtype)
+            self.actor_image_encoder = self.critic_image_encoder
 
             if self.config.use_state_encoder:
                 self.critic_state_encoder = CompactStateEncoder(
@@ -1444,7 +1445,7 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
         # =============================================================
 
         # Convert back to [-1, 1] range (to match PIL-based pipeline)
-        resized_img = resized_img * 2.0 - 1.0  # [0, 1] -> [-1, 1]
+        # resized_img = resized_img * 2.0 - 1.0  # [0, 1] -> [-1, 1]
 
         # Add num_images dimension: [B, C, 64, 64] -> [B, 1, C, 64, 64]
         resized_img = resized_img.unsqueeze(1)

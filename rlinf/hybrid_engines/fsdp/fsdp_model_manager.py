@@ -510,6 +510,7 @@ class FSDPModelManager:
         main_optim_config: DictConfig,
         param_filters: dict[str, list[str]],
         filtered_optim_config: dict[str, DictConfig],
+        both_optimizers_params: list[str]
     ):
         main_betas = (
             main_optim_config.get("adam_beta1", 0.9),
@@ -530,6 +531,8 @@ class FSDPModelManager:
             filtered_optim_lr_map[key] = config.lr
 
         main_optim_params = []
+        main_optim_names = []
+        critic_optim_names = []
 
         filtered_params_dict = {}
         for key in param_filters.keys():
@@ -540,21 +543,27 @@ class FSDPModelManager:
             if not param.requires_grad:
                 continue
 
-            is_matched = False
+            matched_filters: list[str] = []
             for key, filters in param_filters.items():
                 for f in filters:
                     if f in name:
-                        filtered_params_dict[key].append(param)
-                        is_matched = True
-                        break
-                if is_matched:
-                    break
+                        matched_filters.append(f)
 
-            if is_matched:
+            if not matched_filters:
+                main_optim_params.append(param)
+                main_optim_names.append(name)
                 continue
 
-            main_optim_params.append(param)
+            critic_key = next(iter(param_filters.keys()))
+            filtered_params_dict[critic_key].append(param)
+            critic_optim_names.append(name)
 
+            if any(f in both_optimizers_params for f in matched_filters):
+                main_optim_params.append(param)
+                main_optim_names.append(name)
+
+        self._logger.info(f"main_optim_names: {main_optim_names}")
+        self._logger.info(f"critic_optim_names: {critic_optim_names}")
         assert len(main_optim_params) > 0
         main_optimizer = torch.optim.Adam(
             [
@@ -567,6 +576,9 @@ class FSDPModelManager:
             ]
         )
         optimizers = [main_optimizer]
+        total_optimized_params = sum(p.numel() for group in main_optimizer.param_groups for p in group['params'])
+        self._logger.info(f"Number of parameters being optimized: {total_optimized_params}")
+
 
         for key, params in filtered_params_dict.items():
             assert len(params) > 0, (
@@ -585,6 +597,8 @@ class FSDPModelManager:
                     ]
                 )
             )
+        total_optimized_params = sum(p.numel() for group in optimizers[1].param_groups for p in group['params'])
+        self._logger.info(f"Number of critic parameters being optimized: {total_optimized_params}")
         return optimizers
 
     def build_grad_scaler(self, enabled: bool, **kwargs) -> ShardedGradScaler:
