@@ -338,7 +338,6 @@ class EnvWorker(Worker):
             policy=self.cfg.actor.model.get("policy_setup", None),
             wm_env_type=self.cfg.env.eval.get("wm_env_type", None),
         )
-        env_info = {}
 
         obs_list, _, chunk_terminations, chunk_truncations, infos_list = (
             self.eval_env_list[stage_id].chunk_step(chunk_actions)
@@ -347,16 +346,22 @@ class EnvWorker(Worker):
             extracted_obs = obs_list[-1] if obs_list else None
         if isinstance(infos_list, (list, tuple)):
             infos = infos_list[-1] if infos_list else None
+        env_info = {}
         chunk_dones = torch.logical_or(chunk_terminations, chunk_truncations)
-
-        if chunk_dones.any():
-            if "episode" in infos:
+        if not self.cfg.env.eval.auto_reset:
+            if self.cfg.env.eval.get("ignore_terminations", False):
+                if chunk_truncations[:, -1].any():
+                    assert chunk_truncations[:, -1].all()
+                    if "episode" in infos:
+                        for key in infos["episode"]:
+                            env_info[key] = infos["episode"][key].cpu()
+            elif "episode" in infos:
                 for key in infos["episode"]:
                     env_info[key] = infos["episode"][key].cpu()
-            if "final_info" in infos:
-                final_info = infos["final_info"]
-                for key in final_info["episode"]:
-                    env_info[key] = final_info["episode"][key][chunk_dones[:, -1]].cpu()
+        elif chunk_dones.any() and "final_info" in infos:
+            final_info = infos["final_info"]
+            for key in final_info["episode"]:
+                env_info[key] = final_info["episode"][key][chunk_dones[:, -1]].cpu()
 
         env_output = EnvOutput(
             obs=extracted_obs,
@@ -631,13 +636,15 @@ class EnvWorker(Worker):
         return env_outputs
 
     def record_env_metrics(
-        self, env_metrics: dict[str, list], env_info: dict[str, Any], epoch: int
+        self,
+        env_metrics: dict[str, list],
+        env_info: dict[str, Any],
+        epoch: int,
+        mode: Literal["train", "eval"] = "train",
     ):
+        env_cfg = self.cfg.env.train if mode == "train" else self.cfg.env.eval
         for key, value in env_info.items():
-            if (
-                not self.cfg.env.train.auto_reset
-                and not self.cfg.env.train.ignore_terminations
-            ):
+            if not env_cfg.auto_reset and not env_cfg.get("ignore_terminations", False):
                 if key in env_metrics and len(env_metrics[key]) > epoch:
                     env_metrics[key][epoch] = value
                 else:
@@ -848,8 +855,9 @@ class EnvWorker(Worker):
                         raw_chunk_actions, stage_id
                     )
 
-                    for key, value in env_info.items():
-                        eval_metrics[key].append(value)
+                    self.record_env_metrics(
+                        eval_metrics, env_info, eval_rollout_epoch, mode="eval"
+                    )
 
                     if self.cfg.env.eval.auto_reset:
                         if (
