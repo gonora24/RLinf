@@ -284,6 +284,8 @@ class GaussianPolicy(nn.Module):
 
             # Optional: rescale to [low, high]
             if self.low is not None and self.high is not None:
+                # dsrl_pi0's rescale_from_tanh:
+                # y = (x + 1) / 2 * (high - low) + low
                 scale_factor = (self.high - self.low) / 2.0
                 shift = (self.high + self.low) / 2.0
                 action = y_t * scale_factor + shift
