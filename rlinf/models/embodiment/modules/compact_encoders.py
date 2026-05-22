@@ -48,19 +48,19 @@ class LightweightImageEncoder64(nn.Module):
         # After stride 1: remains 32x32
         final_h = image_size // 2  # 32
         final_w = image_size // 2  # 32
-        self.flat_dim = 32 * final_h * final_w  # 32 * 32 * 32 = 32,768
+        self.flat_dim = 20000 #32 * final_h * final_w  # 32 * 32 * 32 = 32,768
 
         # CNN encoder (same architecture as LightweightImageEncoder)
         self.encoder = nn.Sequential(
             # Conv1: stride=2 for downsampling (64 -> 32)
-            nn.Conv2d(num_images * 3, 32, kernel_size=3, stride=2, padding=1),
+            nn.Conv2d(num_images * 3, 32, kernel_size=3, stride=2, padding=0),
             nn.ReLU(),
-            # Conv2-4: stride=1, preserve spatial size (32x32)
-            nn.Conv2d(32, 32, kernel_size=3, stride=1, padding=1),
+            # Conv2-4: stride=1, preserve spatial size (31x31)
+            nn.Conv2d(32, 32, kernel_size=3, stride=1, padding=0),
             nn.ReLU(),
-            nn.Conv2d(32, 32, kernel_size=3, stride=1, padding=1),
+            nn.Conv2d(32, 32, kernel_size=3, stride=1, padding=0),
             nn.ReLU(),
-            nn.Conv2d(32, 32, kernel_size=3, stride=1, padding=1),
+            nn.Conv2d(32, 32, kernel_size=3, stride=1, padding=0),
             nn.ReLU(),
         )
 
@@ -284,7 +284,7 @@ class CompactQHead(nn.Module):
                 if i == len(self.net) - 1:  # Output layer
                     # Small init: std=0.01 so Q-values start near 0
                     # nn.init.normal_(m.weight, mean=0.0, std=0.01)
-                    nn.init.orthogonal_(m.weight, gain=1.0)
+                    nn.init.orthogonal_(m.weight, gain=1.0) # to not get exploding gradients
                     if m.bias is not None:
                         nn.init.zeros_(m.bias)
                 else:  # Hidden layers
