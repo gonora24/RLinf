@@ -177,6 +177,18 @@ def random_flip(images: torch.Tensor, seed: Optional[int] = None) -> torch.Tenso
     # Vektorisierung via vmap: Mapping über Dimension 0 für Bild und Maske
     return vmap(_random_flip_pure, in_dims=(0, 0))(images, flip_masks)
 
+# color_jitter.py — proposed:
+_CUDA_GENERATORS: dict[torch.device, torch.Generator] = {}
+
+def _get_generator(device: torch.device, seed: int | None) -> torch.Generator:
+    key = device
+    if key not in _CUDA_GENERATORS:
+        _CUDA_GENERATORS[key] = torch.Generator(device=device)
+    gen = _CUDA_GENERATORS[key]
+    if seed is not None:
+        gen.manual_seed(seed)
+    return gen
+
 
 @torch.no_grad()
 def color_transform(
@@ -200,9 +212,7 @@ def color_transform(
     dtype = images.dtype
     N = images.shape[0]
 
-    gen = torch.Generator(device=device)
-    if seed is not None:
-        gen.manual_seed(seed)
+    gen = _get_generator(device, seed)
 
     # 1. Batched RNG-Werte vorab generieren (Pure Inputs für vmap)
     should_apply    = torch.rand(N, generator=gen, device=device, dtype=dtype) <= apply_prob
