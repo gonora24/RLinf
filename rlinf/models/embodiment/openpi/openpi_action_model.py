@@ -87,6 +87,7 @@ class OpenPi0Config(Pi0Config):
     use_toperl_critic: bool = False  # use topErl critic for DSRL
     action_magnitude: float = 1.0  # action magnitude for DSRL
     use_state_encoder: bool = False  # use state encoder for DSRL
+    dsrl_share_image_encoder: bool = False  # share actor/critic CNN weights if True
     use_actor_transformer: bool = False  # use actor transformer for DSRL
     critic_num_layers: int = 3  # number of layers for critic
 
@@ -257,7 +258,14 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
                 latent_dim=self.config.dsrl_image_latent_dim,
                 image_size=64,
             ).to(dtype=_dsrl_dtype)
-            self.actor_image_encoder = self.critic_image_encoder
+            if self.config.dsrl_share_image_encoder:
+                self.actor_image_encoder = self.critic_image_encoder
+            else:
+                self.actor_image_encoder = LightweightImageEncoder64(
+                    num_images=1,
+                    latent_dim=self.config.dsrl_image_latent_dim,
+                    image_size=64,
+                ).to(dtype=_dsrl_dtype)
 
             if self.config.use_state_encoder:
                 self.critic_state_encoder = CompactStateEncoder(
@@ -1436,12 +1444,15 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
 
         # ===== GPU-ACCELERATED RESIZE (aligned with PIL behavior) =====
         # PyTorch bilinear with align_corners=False approximates PIL's behavior
-        resized_img = F.interpolate(
-            agentview_img,
-            size=(target_size, target_size),
-            mode="bilinear",
-            align_corners=False,
-        )
+        if H != target_size or W != target_size:
+            resized_img = F.interpolate(
+                agentview_img,
+                size=(target_size, target_size),
+                mode="bilinear",
+                align_corners=False,
+            )
+        else:
+            resized_img = agentview_img
         # =============================================================
 
         # Convert back to [-1, 1] range (to match PIL-based pipeline)
