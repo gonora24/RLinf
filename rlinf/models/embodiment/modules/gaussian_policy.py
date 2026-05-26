@@ -203,7 +203,7 @@ class GaussianPolicy(nn.Module):
         # dsrl_pi0 uses kernel_init=default_init(1e-2), so log_std starts near 0
         # (rather than being fixed to a specific value).
         # nn.init.xavier_uniform_(self.log_std_layer.weight, gain=0.01)
-        nn.init.orthogonal_(self.log_std_layer.weight, gain=0.01)
+        nn.init.orthogonal_(self.log_std_layer.weight, gain=0.01) # genau wie bei dsrl_pi0
         # Bias initialized to 0 so log_std starts at 0 (std = exp(0) = 1.0)
         nn.init.zeros_(self.log_std_layer.bias)
 

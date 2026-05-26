@@ -3,7 +3,7 @@
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:1 
 #SBATCH --error=/pfs/work9/workspace/scratch/ka_eu3660-rlinf_tmp/slurm-%j.err
-#SBATCH --job-name=libero_10_dsrl_openpi
+#SBATCH --job-name=libero_10_task8_dsrl_openpi
 
 export WANDB_API_KEY='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'
 export WANDB_EMAIL='noragorhan@gmail.com'
@@ -11,9 +11,9 @@ export WANDB_USERNAME='noragorhan'
 export WANDB_TEAM='noras-masterarbeit'
 export WANDB_RUN_GROUP='DSRL'
 export WANDB_JOB_TYPE='train'
-export WANDB_MODE='offline'
+# export WANDB_MODE='offline'
 
-export NUM_CPUS=$(( SLURM_JOB_CPUS_PER_NODE * 95 / 100 )) # to leave 15% for other processes
+export NUM_CPUS=$(( SLURM_JOB_CPUS_PER_NODE * 95 / 100 )) # to leave 5% for other processes
 printf "NUM_CPUS: %s\n" "$NUM_CPUS"
 
 export DEBUG=0
