@@ -80,6 +80,61 @@ def drq_crop_extra(x, pad=4):
 
 
 @torch.no_grad()
+def resize_main_images_for_dsrl(obs, size=64):
+    """Resize main camera images to DSRL critic resolution before augmentation.
+
+    Replay buffers store env-resolution images (e.g. 256x256). DRQ and color
+    jitter should run at the same 64x64 resolution used by dsrl_pi0 and the
+    DSRL encoder, not at full resolution.
+    """
+    if obs.get("main_images") is None:
+        return obs
+
+    x = obs["main_images"]
+    if x.ndim != 4:
+        raise ValueError(f"main_images expected 4D, got {tuple(x.shape)}")
+
+    if x.shape[1] == 3:  # BCHW
+        x_bchw = x
+        return_layout = "bchw"
+    elif x.shape[-1] == 3:  # BHWC
+        x_bchw = x.permute(0, 3, 1, 2).contiguous()
+        return_layout = "bhwc"
+    else:
+        raise ValueError(
+            f"main_images expected [B,3,H,W] or [B,H,W,3], got {tuple(x.shape)}"
+        )
+
+    _, _, h, w = x_bchw.shape
+    if h == size and w == size:
+        return obs
+
+    if x_bchw.dtype == torch.uint8:
+        x_float = x_bchw.float() / 255.0
+    else:
+        x_float = x_bchw.float()
+        if x_float.min() < 0:
+            x_float = (x_float + 1.0) / 2.0
+
+    resized = F.interpolate(
+        x_float, size=(size, size), mode="bilinear", align_corners=False
+    )
+    if x_bchw.dtype == torch.uint8:
+        obs["main_images"] = (resized.clamp(0.0, 1.0) * 255.0).round().to(torch.uint8)
+        if return_layout == "bhwc":
+            obs["main_images"] = obs["main_images"].permute(0, 2, 3, 1).contiguous()
+    else:
+        resized = resized.to(dtype=x_bchw.dtype)
+        obs["main_images"] = (
+            resized.permute(0, 2, 3, 1).contiguous()
+            if return_layout == "bhwc"
+            else resized
+        )
+
+    return obs
+
+
+@torch.no_grad()
 def apply_drq(obs, pad=4):
     """
     Apply DRQ (random crop data regularization) to an observation dict.
