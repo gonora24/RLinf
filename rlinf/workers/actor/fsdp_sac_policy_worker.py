@@ -125,15 +125,23 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
             )
             self.target_model.requires_grad_(False)
             self.target_model_initialized = True
+            self._trainable_param_names = {
+                name for name, p in self.model.named_parameters() if p.requires_grad
+            }
 
         self.use_dsrl = self.cfg.actor.model.get("openpi", {}).get("use_dsrl", False)
         use_dsrl = self.use_dsrl
         if use_dsrl:
-            # DSRL: separate actor/critic encoders into different optimizer groups
+            # DSRL: route critic modules to qf_optimizer; actor encoder/noise net to main.
             param_filters = {
                 "critic": ["critic_image_encoder", "critic_state_encoder", "q_head", "critic"]
             }
-            both_optimizers_params = ["critic_image_encoder"]
+            share_encoder = self.cfg.actor.model.get("openpi", {}).get(
+                "dsrl_share_image_encoder", False
+            )
+            both_optimizers_params = (
+                ["critic_image_encoder"] if share_encoder else []
+            )
         else:
             param_filters = {"critic": ["encoders", "encoder", "q_head", "state_proj"]}
             both_optimizers_params = []
@@ -318,6 +326,8 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
                     self.model.named_parameters(),
                     self.target_model.named_parameters(),
                 ):
+                    if name1 not in self._trainable_param_names:
+                        continue # skip non-trainable parameters
                     assert name1 == name2
                     if "q_head" not in name1 and self.target_update_type != "all":
                         shadow = self._target_shadow_f32[name1]
@@ -362,6 +372,12 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
             if len(intervene_traj_list) > 0:
                 self.demo_buffer.add_trajectories(intervene_traj_list)
 
+    def _dsrl_bootstrap_horizon(self, batch, use_action_chunking: bool) -> int:
+        """Steps between Pi0 re-queries used for Bellman discounting."""
+        if use_action_chunking:
+            return int(batch["actions"].shape[1])
+        return int(self.cfg.actor.model.get("num_action_chunks", 1))
+
     @Worker.timer("forward_critic")
     def forward_critic(self, batch):
         use_intra_chunking = self.cfg.algorithm.get("use_intra_chunking", False)
@@ -379,9 +395,7 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
         chunk_reward = self.cfg.algorithm.get("chunk_reward", False)
         use_action_chunking = self.cfg.actor.model.get("openpi", {}).get("use_action_chunking", False)
         if use_dsrl:
-            # num_action_chunks = self.cfg.actor.model.get("num_action_chunks", 1)
-            # discount = self.cfg.algorithm.gamma**num_action_chunks
-            self.action_horizon = batch["actions"].shape[1]
+            self.action_horizon = self._dsrl_bootstrap_horizon(batch, use_action_chunking)
             discount = self.cfg.algorithm.gamma**self.action_horizon
             batch_dim = batch["actions"].shape[0]
             if chunk_reward:
@@ -397,7 +411,15 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
                 rewards_for_bootstrap = (batch["rewards"] * gamma_powers).sum(dim=-1, keepdim=True).to(self.torch_dtype)
                 # rewards_for_bootstrap = rewards_for_bootstrap / self.action_horizon # normalize
             else:
-                rewards_for_bootstrap = batch["rewards"][:, 0:1].to(self.torch_dtype)
+                # After loading batch["rewards"] and batch["terminations"]
+                r = batch["rewards"][:, 0:1].clone()
+                term = batch["terminations"].any(dim=-1, keepdim=True)
+                # succ = term & (batch["terminations"].any(dim=-1, keepdim=True))  # refine if needed
+                # Last success query: if terminated and reward at any step in chunk is 0:
+                has_zero = (batch["rewards"] == 0).any(dim=-1, keepdim=True)
+                r = torch.where(term & has_zero, torch.zeros_like(r), r)
+                rewards_for_bootstrap = r
+                # rewards_for_bootstrap = batch["rewards"][:, 0:1].to(self.torch_dtype)
         else:
             discount = self.cfg.algorithm.gamma
             rewards_for_bootstrap = (
@@ -937,17 +959,32 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
         #             os.path.join(debug_image_dir, f"next_main_images_{i}.png"),
         #         )
         with self.worker_timer("apply_augmentations"):
-            seed = self.cfg.actor.get("seed", 1234)
+            base_seed = self.cfg.actor.get("seed", 1234) + self.update_step
             for i, batch in enumerate(train_micro_batch_list):
                 batch = put_tensor_device(batch, device=self.device)
+                if self.use_dsrl and (self.enable_drq or self.color_jitter):
+                    batch["curr_obs"] = drq.resize_main_images_for_dsrl(batch["curr_obs"])
+                    batch["next_obs"] = drq.resize_main_images_for_dsrl(batch["next_obs"])
                 if self.enable_drq:
                     batch["curr_obs"] = drq.apply_drq(batch["curr_obs"], pad=4)
                     batch["next_obs"] = drq.apply_drq(batch["next_obs"], pad=4)
                 if self.color_jitter:
                     curr_main_images = batch["curr_obs"]["main_images"]
-                    batch["curr_obs"]["main_images"] = (color_jitter.color_transform(curr_main_images.to(torch.float32)/255.0, seed=seed)*255.0).to(torch.uint8)
+                    curr_seed = base_seed + i * 2
+                    batch["curr_obs"]["main_images"] = (
+                        color_jitter.color_transform(
+                            curr_main_images.to(torch.float32) / 255.0, seed=curr_seed
+                        )
+                        * 255.0
+                    ).to(torch.uint8)
                     next_main_images = batch["next_obs"]["main_images"]
-                    batch["next_obs"]["main_images"] = (color_jitter.color_transform(next_main_images.to(torch.float32)/255.0, seed=seed)*255.0).to(torch.uint8)
+                    batch["next_obs"]["main_images"] = (
+                        color_jitter.color_transform(
+                            next_main_images.to(torch.float32) / 255.0,
+                            seed=curr_seed + 1,
+                        )
+                        * 255.0
+                    ).to(torch.uint8)
                 train_micro_batch_list[i] = batch
 
         # for batch in train_micro_batch_list:
@@ -1139,7 +1176,8 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
 
         torch.cuda.synchronize()
         torch.distributed.barrier()
-        torch.cuda.empty_cache()
+        if self.update_step % 20 == 0:   # only periodically
+            torch.cuda.empty_cache()
         return mean_metric_dict
 
     def compute_advantages_and_returns(self):
