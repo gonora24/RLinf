@@ -377,7 +377,7 @@ class LiberoEnv(gym.Env):
             )
 
     def update_reset_state_ids(self):
-        if self.cfg.is_eval or self.cfg.use_ordered_reset_state_ids:
+        if self.cfg.use_ordered_reset_state_ids:
             reset_state_ids = self._get_ordered_reset_state_ids(self.num_group)
         else:
             reset_state_ids = self._get_random_reset_state_ids(self.num_group)
