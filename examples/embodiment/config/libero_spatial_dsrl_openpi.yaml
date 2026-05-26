@@ -64,7 +64,7 @@ algorithm:
   tau: 0.005
 
   entropy_tuning:
-    alpha_type: softplus
+    alpha_type: exp
     initial_alpha: 1.0
     target_entropy: -16
     optim:
@@ -114,7 +114,7 @@ env:
     max_episode_steps: 240
     max_steps_per_rollout_epoch: 240
     specific_reset_id: null
-    use_ordered_reset_state_ids: True
+    use_ordered_reset_state_ids: False
   eval:
     task_id: 7
     total_num_envs: 10 #500
@@ -126,7 +126,7 @@ env:
     is_eval: True
     group_size: 1
     specific_reset_id: null
-    use_ordered_reset_state_ids: True
+    use_ordered_reset_state_ids: False
     video_cfg:
       save_video: True
       video_base_dir: ${runner.logger.log_path}/video/eval
@@ -171,6 +171,7 @@ actor:
       dsrl_image_latent_dim: 50 #64
       dsrl_state_latent_dim: 50 #64
       dsrl_hidden_dims: [128, 128, 128]
+      dsrl_share_image_encoder: False
       train_expert_only: True
       detach_critic_input: True
       noise_method: "reinflow"

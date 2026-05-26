@@ -25,7 +25,7 @@ runner:
     experiment_name: "libero_10_dsrl_task9_openpi_1env_drq_colorjitter"
     logger_backends: ["wandb"]
 
-  max_epochs: 1250
+  max_epochs: 1275
   max_steps: -1
 
   only_eval: False
@@ -67,25 +67,25 @@ algorithm:
   tau: 0.005
 
   entropy_tuning:
-    alpha_type: softplus
+    alpha_type: exp
     initial_alpha: 1.0
     target_entropy: -16
     optim:
       lr: 3.0e-4
       lr_scheduler: torch_constant
-      clip_grad: 10.0
+      clip_grad: 100.0
 
   replay_buffer:
     enable_cache: True
     enable_preload: True
     cache_size: 600 #15000
     sample_window_size: 25000 #15000
-    min_buffer_size: 25 #10 # ca 26 episodes collected like in dsrl
+    min_buffer_size: 26 #10 # ca 26 episodes collected like in dsrl
     auto_save: True
 
   target_update_freq: 1
   target_update_type: all
-  train_actor_steps: 25 #10
+  train_actor_steps: 26 #10
 
   filter_rewards: False
   rewards_lower_bound: 0.1
@@ -180,10 +180,12 @@ actor:
       dsrl_hidden_dims: [128, 128, 128]
       train_expert_only: True
       detach_critic_input: True
+      dsrl_share_image_encoder: False
       noise_method: "reinflow"
       use_action_chunking: False
       action_magnitude: 1.0
       use_state_encoder: False
+      
 
   optim:
     lr: 1.0e-4
@@ -191,6 +193,7 @@ actor:
     adam_beta2: 0.999 #0.96 as in dsrl_pi0
     adam_eps: 1.0e-08
     clip_grad: 100.0 #3.5 effectively disabled
+    lr_scheduler: torch_constant
     
 
   critic_optim:
