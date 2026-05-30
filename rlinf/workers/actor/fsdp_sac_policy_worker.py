@@ -95,6 +95,51 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
                 self.model, mode="default"
             )  # max-autotune-no-cudagraphs
             self.target_model = torch.compile(self.target_model, mode="default")
+        elif self.use_dsrl:
+            # Compile DSRL sub-module forward passes (not the modules themselves).
+            # Replacing sub-modules with torch.compile(module) inserts _orig_mod
+            # into FSDP parameter names and breaks sync_model_to_rollout; compiling
+            # forward keeps the module tree intact while JIT-ing the hot paths.
+            def _unwrap_fsdp(m):
+                while hasattr(m, "_fsdp_wrapped_module"):
+                    m = m._fsdp_wrapped_module
+                return m
+
+            def _compile_forward(module):
+                module.forward = torch.compile(module.forward, fullgraph=False)
+
+            _dsrl_actor_attrs = [
+                "actor_image_encoder",
+                "critic_image_encoder",
+                "dsrl_action_noise_net",
+                "q_head",
+            ]
+            _dsrl_target_attrs = ["critic_image_encoder", "q_head"]
+            try:
+                compiled_ids = set()
+                inner = _unwrap_fsdp(self.model)
+                for attr in _dsrl_actor_attrs:
+                    if hasattr(inner, attr):
+                        mod = getattr(inner, attr)
+                        if id(mod) not in compiled_ids:
+                            _compile_forward(mod)
+                            compiled_ids.add(id(mod))
+                target_inner = _unwrap_fsdp(self.target_model)
+                for attr in _dsrl_target_attrs:
+                    if hasattr(target_inner, attr):
+                        mod = getattr(target_inner, attr)
+                        if id(mod) not in compiled_ids:
+                            _compile_forward(mod)
+                            compiled_ids.add(id(mod))
+                self.log_on_first_rank(
+                    "[DSRL] Compiled DSRL sub-module forward passes with "
+                    f"torch.compile ({_dsrl_actor_attrs})"
+                )
+            except Exception as e:
+                self.log_on_first_rank(
+                    f"[DSRL] torch.compile for DSRL sub-modules failed (continuing "
+                    f"without compile): {e}"
+                )
 
     def setup_model_and_optimizer(self, initialize_target=False) -> None:
         """Setup model, lr_scheduler, optimizer and grad_scaler."""
@@ -218,6 +263,7 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
                 "trajectory_format", "pt"
             ),
         )
+        self._last_rollout_num_transitions = 0
 
         min_demo_buffer_size = 0
         if self.cfg.algorithm.get("demo_buffer", None) is not None:
@@ -359,7 +405,34 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
             trajectory: Trajectory = await input_channel.get(async_op=True).async_wait()
             recv_list.append(trajectory)
 
+        if self.use_dsrl and recv_list:
+            # Pre-resize trajectory images from env resolution (e.g. 256×256) to
+            # the 64×64 DSRL encoder input resolution.  This avoids running the
+            # same bilinear resize 2×400=800 times per rollout step inside
+            # update_one_epoch; resize_main_images_for_dsrl becomes a no-op when
+            # images are already at the target size.
+            for traj in recv_list:
+                for obs_dict in (traj.curr_obs, traj.next_obs):
+                    if obs_dict and "main_images" in obs_dict:
+                        img = obs_dict["main_images"]
+                        if isinstance(img, torch.Tensor) and img.ndim >= 3:
+                            orig_shape = img.shape
+                            # Flatten leading dims so resize_main_images_for_dsrl
+                            # sees a 4-D [B, H, W, C] or [B, C, H, W] tensor.
+                            flat = img.reshape(-1, *orig_shape[-3:])
+                            resized_dict = drq.resize_main_images_for_dsrl(
+                                {"main_images": flat}, size=64
+                            )
+                            obs_dict["main_images"] = resized_dict["main_images"].reshape(
+                                *orig_shape[:-3], *resized_dict["main_images"].shape[-3:]
+                            )
+
         self.replay_buffer.add_trajectories(recv_list)
+
+        if recv_list:
+            self._last_rollout_num_transitions = max(
+                self._trajectory_num_sac_transitions(traj) for traj in recv_list
+            )
 
         if self.demo_buffer is not None:
             intervene_traj_list = []
@@ -371,6 +444,26 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
 
             if len(intervene_traj_list) > 0:
                 self.demo_buffer.add_trajectories(intervene_traj_list)
+
+    @staticmethod
+    def _trajectory_num_sac_transitions(trajectory: Trajectory) -> int:
+        if getattr(trajectory, "num_sac_transitions", 0) > 0:
+            return int(trajectory.num_sac_transitions)
+        if trajectory.rewards is not None:
+            return int(trajectory.rewards.shape[0])
+        if trajectory.curr_obs:
+            first = next(iter(trajectory.curr_obs.values()))
+            if isinstance(first, torch.Tensor) and first.dim() >= 1:
+                return int(first.shape[0])
+        return 0
+
+    def _resolve_update_epoch(self) -> int:
+        if self.cfg.algorithm.get("dynamic_update_epoch", False):
+            multi_grad_step = int(self.cfg.algorithm.get("multi_grad_step", 20))
+            num_transitions = int(getattr(self, "_last_rollout_num_transitions", 0))
+            if num_transitions > 0:
+                return num_transitions * multi_grad_step
+        return int(self.cfg.algorithm.get("update_epoch", 1))
 
     def _dsrl_bootstrap_horizon(self, batch, use_action_chunking: bool) -> int:
         """Steps between Pi0 re-queries used for Bellman discounting."""
@@ -971,20 +1064,16 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
                 if self.color_jitter:
                     curr_main_images = batch["curr_obs"]["main_images"]
                     curr_seed = base_seed + i * 2
-                    batch["curr_obs"]["main_images"] = (
-                        color_jitter.color_transform(
-                            curr_main_images.to(torch.float32) / 255.0, seed=curr_seed
-                        )
-                        * 255.0
-                    ).to(torch.uint8)
+                    # Keep images as float32 [0, 1] to avoid a uint8 round-trip
+                    # conversion in the subsequent _preprocess_dsrl_images call.
+                    batch["curr_obs"]["main_images"] = color_jitter.color_transform(
+                        curr_main_images.to(torch.float32) / 255.0, seed=curr_seed
+                    )
                     next_main_images = batch["next_obs"]["main_images"]
-                    batch["next_obs"]["main_images"] = (
-                        color_jitter.color_transform(
-                            next_main_images.to(torch.float32) / 255.0,
-                            seed=curr_seed + 1,
-                        )
-                        * 255.0
-                    ).to(torch.uint8)
+                    batch["next_obs"]["main_images"] = color_jitter.color_transform(
+                        next_main_images.to(torch.float32) / 255.0,
+                        seed=curr_seed + 1,
+                    )
                 train_micro_batch_list[i] = batch
 
         # for batch in train_micro_batch_list:
@@ -1166,7 +1255,12 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
         self.model.train()
         metrics = {}
 
-        update_epoch = self.cfg.algorithm.get("update_epoch", 1)
+        update_epoch = self._resolve_update_epoch()
+        metrics["sac/update_epoch"] = update_epoch
+        if self.cfg.algorithm.get("dynamic_update_epoch", False):
+            metrics["sac/rollout_num_transitions"] = int(
+                getattr(self, "_last_rollout_num_transitions", 0)
+            )
         for _ in range(update_epoch):
             metrics_data = self.update_one_epoch(train_actor=train_actor)
             append_to_dict(metrics, metrics_data)

@@ -662,6 +662,8 @@ class EnvWorker(Worker):
     async def send_rollout_trajectories(
         self, rollout_result: EmbodiedRolloutResult, channel: Channel
     ):
+        if self.cfg.algorithm.get("truncate_at_first_done", False):
+            rollout_result.truncate_at_first_done(env_idx=0)
         trajectories: Trajectory = rollout_result.to_splited_trajectories(
             self.actor_split_num
         )

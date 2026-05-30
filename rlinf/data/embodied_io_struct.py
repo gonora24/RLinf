@@ -481,6 +481,8 @@ class Trajectory:
     next_obs: dict[str, Any] = field(default_factory=dict)
     # Per rollout timestep: stacked obs from intermediate_obs list ([K, B, ...] keys).
     intermediate_obs: list[dict[str, Any]] | None = None
+    # Pi0-query transitions in this trajectory (T in [T, B, ...] tensors).
+    num_sac_transitions: int = 0
 
     @staticmethod
     def _generate_field_mask(
@@ -631,6 +633,107 @@ class EmbodiedRolloutResult:
     intermediate_obs: list[list[dict[str, Any]]] = field(
         default_factory=list
     )  # per rollout step: many obs dicts (chunk intermediates); length = trajectory_length
+    num_sac_transitions: int = 0
+
+    def _env_done_at_step(self, step_idx: int, env_idx: int = 0) -> bool:
+        """True if env ``env_idx`` finished an episode after chunk ``step_idx - 1``."""
+        if step_idx >= len(self.terminations):
+            return False
+        term = self.terminations[step_idx]
+        trunc = (
+            self.truncations[step_idx]
+            if self.truncations and step_idx < len(self.truncations)
+            else None
+        )
+        dones = (
+            self.dones[step_idx]
+            if self.dones and step_idx < len(self.dones)
+            else None
+        )
+        if term.dim() == 1:
+            done = bool(term[env_idx].item())
+        else:
+            done = bool(term[env_idx].any().item())
+        if trunc is not None:
+            done = done or (
+                bool(trunc[env_idx].item())
+                if trunc.dim() == 1
+                else bool(trunc[env_idx].any().item())
+            )
+        if dones is not None:
+            done = done or (
+                bool(dones[env_idx].item())
+                if dones.dim() == 1
+                else bool(dones[env_idx].any().item())
+            )
+        return done
+
+    def _apply_transition_count(self, keep_transitions: int) -> int:
+        """Slice rollout lists to ``keep_transitions`` SAC transitions.
+
+        Transition-aligned fields (actions, rewards, obs, …) are truncated to
+        ``keep_transitions``.  Done flags keep one extra trailing row so replay
+        flatten can align ``reward[t]`` with the post-transition done at index
+        ``t + 1`` (see ``ReplayBuffer._flatten_trajectory``).
+        """
+        keep_transitions = max(int(keep_transitions), 0)
+        keep_done = keep_transitions + 1
+
+        def _slice_transitions(xs):
+            return xs[:keep_transitions] if xs else xs
+
+        def _slice_done_flags(xs):
+            if not xs:
+                return xs
+            if len(xs) >= keep_done:
+                return xs[:keep_done]
+            return xs[:keep_transitions]
+
+        self.actions = _slice_transitions(self.actions)
+        self.intervene_flags = _slice_transitions(self.intervene_flags)
+        self.rewards = _slice_transitions(self.rewards)
+        self.terminations = _slice_done_flags(self.terminations)
+        self.truncations = _slice_done_flags(self.truncations)
+        self.dones = _slice_done_flags(self.dones)
+        self.prev_logprobs = _slice_transitions(self.prev_logprobs)
+        self.prev_values = _slice_transitions(self.prev_values)
+        self.versions = _slice_transitions(self.versions)
+        self.forward_inputs = _slice_transitions(self.forward_inputs)
+        self.curr_obs = _slice_transitions(self.curr_obs)
+        self.next_obs = _slice_transitions(self.next_obs)
+        self.intermediate_obs = _slice_transitions(self.intermediate_obs)
+        self.num_sac_transitions = keep_transitions
+        return keep_transitions
+
+    def truncate_at_first_done(self, env_idx: int = 0) -> int:
+        """Drop post-termination chunk steps (dsrl_pi0-style episode boundary).
+
+        Each entry in ``terminations`` / ``rewards`` corresponds to one env chunk
+        step result. Index ``t`` records whether the env finished during chunk
+        ``t - 1``. Keeping ``t`` entries retains transitions ``0 .. t-1``.
+
+        Returns:
+            Number of SAC transitions kept (``len(curr_obs)`` after truncation).
+        """
+        if not self.terminations:
+            n_trans = len(self.curr_obs)
+            if n_trans > 0:
+                return self._apply_transition_count(n_trans)
+            return 0
+
+        keep = None
+        for step_idx in range(1, len(self.terminations)):
+            if self._env_done_at_step(step_idx, env_idx=env_idx):
+                keep = step_idx
+                break
+
+        if keep is None:
+            # Timeout: keep all chunk transitions; drop only the PPO bootstrap
+            # reward row (no matching action/obs) but retain the trailing done
+            # row needed for the last transition's terminal mask.
+            keep = len(self.curr_obs) if self.curr_obs else len(self.actions)
+        return self._apply_transition_count(keep)
+
     def append_step_result(self, result: ChunkStepResult):
         if result.actions is not None:
             self.actions.append(result.actions)
@@ -798,6 +901,13 @@ class EmbodiedRolloutResult:
             if trajectory.versions is not None
             else torch.zeros(1, dtype=torch.float32)
         )
+
+        if self.num_sac_transitions > 0:
+            trajectory.num_sac_transitions = self.num_sac_transitions
+        elif len(self.curr_obs) > 0:
+            trajectory.num_sac_transitions = len(self.curr_obs)
+        elif trajectory.rewards is not None:
+            trajectory.num_sac_transitions = int(trajectory.rewards.shape[0])
 
         return trajectory
 
